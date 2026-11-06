@@ -33,6 +33,8 @@ def post(client, session_id, **body):
 
 def swap_server(client, server):
     deps = client.app.state.deps
+    if server.state_log_root is None:  # 서버와 같은 컴퓨터의 로그 폴더에 상태 로그를 쓴다
+        server.state_log_root = deps.externals.state_log_root
     client.app.state.deps = replace(deps, externals=replace(deps.externals, analysis=server))
     return server
 
@@ -267,3 +269,88 @@ def test_a_successful_reanalysis_replaces_the_report_id(client, repo):
     swap_server(client, FakeAnalysisServer(report_ids={"000010": "000010_20261106_172435"}))
     post(client, session.id, offset=0, count=1)
     assert repo.get_item(session.id, "000010").report_id == "000010_20261106_172435"
+
+
+# --- 에이전트별 등급 (#21) ---
+
+
+def test_the_agent_ratings_are_read_right_after_the_analysis_and_saved(client, repo):
+    session = seed(repo)
+    ratings = {"market": "Buy", "news": "Hold", "bull": "Overweight", "bear": "Underweight", "portfolio_manager": "Buy"}
+    swap_server(client, FakeAnalysisServer(agent_ratings={"000010": ratings}))
+    post(client, session.id, offset=0, count=2)
+    saved = repo.agent_ratings(session.id, "000010")
+    assert {a: saved[a] for a in ratings} == ratings
+    assert len(saved) == 10  # 나머지 에이전트는 기본 Hold 로 읽힌다
+    assert set(repo.agent_ratings(session.id, "000020").values()) == {"Hold"}  # 종목마다 자기 로그
+
+
+def test_a_cell_that_cannot_be_read_is_left_out_and_the_item_is_still_done(client, repo):
+    session = seed(repo)
+    swap_server(client, FakeAnalysisServer(agent_ratings={"000010": {"news": None, "neutral": None}}))
+    post(client, session.id, offset=0, count=1)
+    saved = repo.agent_ratings(session.id, "000010")
+    assert "news" not in saved and "neutral" not in saved and len(saved) == 8
+    assert repo.get_item(session.id, "000010").state == "done"
+
+
+def test_when_the_state_log_is_missing_the_grade_is_saved_without_agent_ratings(client, repo, tmp_path):
+    session = seed(repo)
+    server = swap_server(client, FakeAnalysisServer(decisions={"000010": "Buy"}))
+    server.state_log_root = tmp_path / "서버가-쓰는-다른-폴더"  # 이 컴퓨터가 읽는 폴더에는 로그가 없다
+    post(client, session.id, offset=0, count=1)
+    item = repo.get_item(session.id, "000010")
+    assert (item.state, item.decision) == ("done", "Buy")
+    assert repo.agent_ratings(session.id, "000010") == {}
+
+
+def test_a_successful_reanalysis_replaces_the_old_agent_ratings(client, repo):
+    session = seed(repo)
+    repo.mark_done(session.id, "000010", decision="Buy", score=1.0, agents_rated=2, agents_total=10)
+    repo.save_agent_ratings(session.id, "000010", {"market": "Buy", "news": "Buy", "bull": "Buy"})
+    repo.mark_failed(session.id, "000010", "이전 재분석 실패")
+    swap_server(client, FakeAnalysisServer(agent_ratings={"000010": {"market": "Sell", "news": None}}))
+    post(client, session.id, offset=0, count=1)
+    saved = repo.agent_ratings(session.id, "000010")
+    assert saved["market"] == "Sell"  # 새 값
+    assert "news" not in saved  # 새 로그에서 비었으면 옛 값을 남기지 않는다
+    assert saved["bull"] == "Hold"  # 새 로그에서 읽은 값
+
+
+def test_a_state_log_that_is_left_from_an_earlier_analysis_does_not_leak_into_a_failed_one(client, repo):
+    from fakes import write_state_log
+
+    session = seed(repo)
+    deps_root = client.app.state.deps.externals.state_log_root
+    write_state_log(deps_root, "000010", date(2026, 11, 5), {"market": "Buy"})  # 이전 분석이 남긴 로그
+    swap_server(client, FakeAnalysisServer(errors=["000010"]))
+    post(client, session.id, offset=0, count=1)
+    assert repo.get_item(session.id, "000010").state == "failed"
+    assert repo.agent_ratings(session.id, "000010") == {}  # 실패한 분석의 로그는 읽지 않는다
+
+
+def test_the_ratings_of_one_stock_do_not_change_the_others(client, repo):
+    session = seed(repo)
+    post(client, session.id, offset=0, count=1)
+    assert repo.agent_ratings(session.id, "000020") == {}  # 처리하지 않은 종목
+
+
+def test_the_session_view_is_unchanged_by_agent_ratings(client, repo):
+    session = seed(repo)
+    post(client, session.id, offset=0, count=1)
+    item = client.get(f"/api/sessions/{session.id}").json()["items"][0]
+    assert (item["score"], item["agents_rated"], item["agents_total"]) == (None, 0, 0)  # 점수와 개수는 #22 가 채운다
+
+
+def test_if_saving_the_agent_ratings_fails_the_stock_is_not_half_done(client, repo, monkeypatch):
+    from krx_screener.repository import SessionRepository
+
+    def broken(self, session_id, code, ratings):
+        raise RuntimeError("DB 오류")
+
+    monkeypatch.setattr(SessionRepository, "save_agent_ratings", broken)
+    session = seed(repo)
+    post(client, session.id, offset=0, count=1)
+    item = repo.get_item(session.id, "000010")
+    assert (item.state, item.decision) == ("failed", "")  # 완료 표시와 등급이 함께 취소된다
+    assert "처리 중 오류" in item.error_message
