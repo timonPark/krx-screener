@@ -7,6 +7,8 @@
   볼 수 있게 한다 (연결을 자동 커밋으로 쓴다).
 - 한 종목의 실패나 예상하지 못한 오류가 나머지 종목을 멈추게 하지 않는다.
 - 분석 설정(``effort``)은 설정의 값(기본 ``low``)을 쓴다. 저장하지 않는다.
+- 세션 단위 잠금(#18)은 요청을 받은 쪽이 쥔 연결로 넘어온다. 이 함수는 그 연결로 일하고, 끝나면 연결을 닫아서 잠금을 푼다
+  (프로세스가 죽어도 연결이 끊겨 DB 가 풀어 준다).
 
 에이전트별 등급 읽기와 평가점수(#21, #22)는 이후 이슈가 이 흐름에 더한다. 지금은 서버가 알려준 최종 등급만 저장하고
 점수는 비워 둔다.
@@ -24,11 +26,14 @@ from krx_screener.repository import NotFoundError, SessionRepository
 logger = logging.getLogger(__name__)
 
 
-def process_codes(deps, session_id: uuid.UUID, as_of: date, codes: list[str]) -> None:
-    """``codes`` 를 순서대로 분석한다. ``deps`` 는 ``api.Dependencies`` 다."""
+def process_codes(deps, conn, session_id: uuid.UUID, as_of: date, codes: list[str]) -> None:
+    """``codes`` 를 순서대로 분석한다. ``deps`` 는 ``api.Dependencies`` 다.
+
+    ``conn`` 은 세션의 처리 잠금을 쥔 자동 커밋 연결이다 (종목마다 바로 커밋 — 조회가 진행 상황을 볼 수 있다).
+    끝나면 이 함수가 연결을 닫아 잠금을 푼다.
+    """
     cfg = deps.config.analysis
-    with deps.connect() as conn:
-        conn.autocommit = True  # 종목마다 바로 커밋 — 조회가 진행 상황을 볼 수 있다
+    with conn:
         repo = SessionRepository(conn)
         for code in codes:
             try:

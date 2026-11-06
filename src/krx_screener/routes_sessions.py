@@ -168,10 +168,11 @@ def get_session(session_id: str, request: Request) -> SessionDetailOut:
         session = _find_session(repo, session_id)
         counts = repo.counts(session.id)
         items = repo.items(session.id)
+        processing = repo.is_locked(session.id)
     return SessionDetailOut(
         session=SessionOut.of(session),
-        # 처리 중 표시는 지금은 실행 중인 종목이 있는지로 정한다. 세션 단위 잠금(#18)이 생기면 잠금 상태를 따른다.
-        processing=counts["running"] > 0,
+        # 처리 중인지는 세션의 처리 잠금으로 안다. 종목 상태(running)는 처리하던 프로세스가 죽으면 남을 수 있다.
+        processing=processing,
         ranked_at=_utc(session.ranked_at),
         rank_stale=False,  # 정리(#24) 이후 재분석 여부는 #25 가 계산한다
         counts=CountsOut(**counts),
@@ -190,18 +191,29 @@ def process(session_id: str, body: ProcessRequest, request: Request, background:
 
     바로 ``202 {"started": true, "queued": N}`` 으로 응답하고 분석은 뒤에서 한 종목씩 돌린다. 구간 안의 종목이
     모두 끝나 있으면 아무것도 보내지 않고 ``200 {"started": false, "queued": 0}`` 이다.
+    같은 세션이 이미 처리 중이면 ``409`` 다 (세션 단위 잠금, #18). 다른 세션은 막히지 않는다.
     """
     deps = request.app.state.deps
-    with deps.connect() as conn:
+    conn = deps.connect()
+    conn.autocommit = True
+    handed_over = False  # 연결(과 잠금)을 뒤의 처리에 넘겼는가. 넘기지 않았으면 여기서 닫아 잠금을 푼다
+    try:
         repo = SessionRepository(conn)
         session = _find_session(repo, session_id)
+        # 구간을 읽기 전에 잠근다: 동시에 온 두 요청이 같은 종목을 둘 다 대기열에 올리지 못하게
+        if not repo.try_lock(session.id):
+            raise HTTPException(409, "이미 처리 중입니다.")
         items = repo.items(session.id)
-    if body.offset >= len(items):
-        raise HTTPException(422, f"오프셋이 종목 수({len(items)})보다 크거나 같습니다.")
-    window = [i for i in items if body.offset < i.seq <= body.offset + body.count]
-    todo = [i.code for i in window if i.state != "done"]  # 끝난 종목은 다시 보내지 않는다
-    if not todo:
-        return JSONResponse(status_code=200, content={"started": False, "queued": 0})
-    deps.externals.analysis.check_health()  # 서버가 꺼져 있으면 아무것도 시작하지 않고 한국어 503
-    background.add_task(process_codes, deps, session.id, session.as_of, todo)
-    return JSONResponse(status_code=202, content={"started": True, "queued": len(todo)})
+        if body.offset >= len(items):
+            raise HTTPException(422, f"오프셋이 종목 수({len(items)})보다 크거나 같습니다.")
+        window = [i for i in items if body.offset < i.seq <= body.offset + body.count]
+        todo = [i.code for i in window if i.state != "done"]  # 끝난 종목은 다시 보내지 않는다
+        if not todo:
+            return JSONResponse(status_code=200, content={"started": False, "queued": 0})
+        deps.externals.analysis.check_health()  # 서버가 꺼져 있으면 아무것도 시작하지 않고 한국어 503
+        background.add_task(process_codes, deps, conn, session.id, session.as_of, todo)
+        handed_over = True
+        return JSONResponse(status_code=202, content={"started": True, "queued": len(todo)})
+    finally:
+        if not handed_over:
+            conn.close()

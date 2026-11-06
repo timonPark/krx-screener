@@ -132,15 +132,6 @@ def test_counts_cover_every_state(client, repo):
     assert get(client, session.id).json()["counts"] == {"pending": 1, "running": 1, "done": 1, "failed": 1}
 
 
-def test_processing_is_true_only_while_a_stock_is_running(client, repo):
-    session = seed(repo)
-    assert get(client, session.id).json()["processing"] is False
-    repo.mark_running(session.id, "028050")
-    assert get(client, session.id).json()["processing"] is True
-    repo.mark_done(session.id, "028050", decision="Hold", score=0.0, agents_rated=10, agents_total=10)
-    assert get(client, session.id).json()["processing"] is False
-
-
 def test_ranking_fields_are_empty_until_a_ranking_is_made(client, repo, pg_conn):
     session = seed(repo)
     body = get(client, session.id).json()
