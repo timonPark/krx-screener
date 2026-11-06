@@ -263,6 +263,24 @@ class SessionRepository:
             self._conn.execute("UPDATE sessions SET ranked_at = now() WHERE id = %s", (session_id,))
         return Ranking(ranked=ranked, unscored=unscored)
 
+    def rank_is_stale(self, session_id: uuid.UUID) -> bool:
+        """정리한 뒤에 분석이 바뀌어서 지금 다시 정리하면 순위가 달라질 수 있는가. 정리한 적이 없으면 False.
+
+        정리 시각(``ranked_at``) 뒤에 분석한 종목 중에서, 순위에 영향을 줄 수 있는 것만 센다:
+        - 정리할 때 순위가 있던 종목 (다시 분석됐으니 점수가 바뀌었거나 실패해서 비교에서 빠져야 한다), 또는
+        - 이제 점수와 함께 끝나서 순위에 들어와야 하는 종목.
+        정리 때도 비교에서 빠져 있었고 지금도 빠져 있는 종목(실패했던 종목이 또 실패, 점수 없던 종목이 또 점수 없음)은
+        다시 정리해도 순위가 같으므로 세지 않는다.
+        """
+        row = self._conn.execute(
+            "SELECT EXISTS ("
+            " SELECT 1 FROM session_items i JOIN sessions s ON s.id = i.session_id"
+            " WHERE i.session_id = %s AND s.ranked_at IS NOT NULL AND i.analyzed_at > s.ranked_at"
+            " AND (i.rank IS NOT NULL OR (i.state = 'done' AND i.score IS NOT NULL)))",
+            (session_id,),
+        ).fetchone()
+        return bool(row[0])
+
     # --- 에이전트별 등급 ---
 
     def save_agent_ratings(
