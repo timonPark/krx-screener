@@ -3,6 +3,7 @@
 - ``POST /api/sessions``  ``{"as_of": "2026-11-05"}`` → 새 세션 (201)
 - ``GET  /api/sessions``  → 최근 순 세션 목록
 - ``GET  /api/sessions/{id}``  (``id`` 에 ``latest`` 가능) → 세션 전체 조회 (#23)
+- ``POST /api/sessions/{id}/process``  ``{"offset": 0, "count": 10}`` → 구간 처리 시작 (#17)
 
 기준일은 거래일이어야 한다. 입력이 잘못되면 422, 거래일이나 전종목 목록을 받을 수 없는 외부 장애면 503 이고,
 둘 다 ``{"detail": "한국어 메시지"}`` 다.
@@ -17,13 +18,15 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, date, datetime
 
-from fastapi import APIRouter, Request
-from pydantic import BaseModel
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel, Field
 
 from krx_screener.analysis import RATING_LABELS, REVIEW
 from krx_screener.asof import resolve_as_of
 from krx_screener.flow import STATUS_LABELS
 from krx_screener.listing import build_items
+from krx_screener.processing import process_codes
 from krx_screener.repository import Item, NotFoundError, Session, SessionRepository
 
 router = APIRouter(prefix="/api/sessions")
@@ -141,22 +144,28 @@ def list_sessions(request: Request) -> list[SessionOut]:
 
 
 
+def _find_session(repo: SessionRepository, session_id: str) -> Session:
+    """``latest`` 는 가장 최근 세션. 없거나 UUID 형식이 아니면 한국어 404 (NotFoundError)."""
+    if session_id == "latest":
+        session = repo.latest_session()
+        if session is None:
+            raise NotFoundError("세션이 없습니다. 먼저 새 목록을 뽑으세요.")
+        return session
+    try:
+        session = repo.get_session(uuid.UUID(session_id))
+    except ValueError:
+        session = None  # 형식이 UUID 가 아니면 없는 세션과 같게 다룬다
+    if session is None:
+        raise NotFoundError("세션을 찾지 못했습니다.")
+    return session
+
+
 @router.get("/{session_id}", response_model=SessionDetailOut)
 def get_session(session_id: str, request: Request) -> SessionDetailOut:
     """세션 전체를 처리 여부와 함께 조회한다. ``latest`` 는 가장 최근 세션이다."""
     with request.app.state.deps.connect() as conn:
         repo = SessionRepository(conn)
-        if session_id == "latest":
-            session = repo.latest_session()
-            if session is None:
-                raise NotFoundError("세션이 없습니다. 먼저 새 목록을 뽑으세요.")
-        else:
-            try:
-                session = repo.get_session(uuid.UUID(session_id))
-            except ValueError:
-                session = None  # 형식이 UUID 가 아니면 없는 세션과 같게 다룬다
-            if session is None:
-                raise NotFoundError("세션을 찾지 못했습니다.")
+        session = _find_session(repo, session_id)
         counts = repo.counts(session.id)
         items = repo.items(session.id)
     return SessionDetailOut(
@@ -168,3 +177,31 @@ def get_session(session_id: str, request: Request) -> SessionDetailOut:
         counts=CountsOut(**counts),
         items=[ItemOut.of(i) for i in items],
     )
+
+
+class ProcessRequest(BaseModel):
+    offset: int = Field(ge=0)  # 목록 앞에서 건너뛸 개수
+    count: int = Field(ge=1)  # 거기서부터 처리할 개수
+
+
+@router.post("/{session_id}/process", response_model=None)
+def process(session_id: str, body: ProcessRequest, request: Request, background: BackgroundTasks) -> JSONResponse:
+    """목록의 ``offset`` 번째 뒤로 ``count`` 개를 처리한다 (순번이 offset+1 ~ offset+count).
+
+    바로 ``202 {"started": true, "queued": N}`` 으로 응답하고 분석은 뒤에서 한 종목씩 돌린다. 구간 안의 종목이
+    모두 끝나 있으면 아무것도 보내지 않고 ``200 {"started": false, "queued": 0}`` 이다.
+    """
+    deps = request.app.state.deps
+    with deps.connect() as conn:
+        repo = SessionRepository(conn)
+        session = _find_session(repo, session_id)
+        items = repo.items(session.id)
+    if body.offset >= len(items):
+        raise HTTPException(422, f"오프셋이 종목 수({len(items)})보다 크거나 같습니다.")
+    window = [i for i in items if body.offset < i.seq <= body.offset + body.count]
+    todo = [i.code for i in window if i.state != "done"]  # 끝난 종목은 다시 보내지 않는다
+    if not todo:
+        return JSONResponse(status_code=200, content={"started": False, "queued": 0})
+    deps.externals.analysis.check_health()  # 서버가 꺼져 있으면 아무것도 시작하지 않고 한국어 503
+    background.add_task(process_codes, deps, session.id, session.as_of, todo)
+    return JSONResponse(status_code=202, content={"started": True, "queued": len(todo)})
