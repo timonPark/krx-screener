@@ -18,6 +18,7 @@
 | `styles.css` | 색·글꼴 토큰(`:root`)과 컴포넌트 스타일 |
 | `app.js` | 화면 상태, 그리기, 버튼 동작, 처리 중 주기적 갱신 |
 | `api.js` | 백엔드 호출. 경로는 이 파일에만 있다 |
+| `report.js` | 보고서 링크 주소 만들기 (`{report_id}` 자리표시자) |
 | `mock.js` | 백엔드 없이 보는 예시 API (`?mock=1`) |
 | `config.js` | API 주소, 갱신 간격, 보고서 링크 주소 등 |
 
@@ -135,8 +136,9 @@
 
 - 보고서 칸은 **TradingAgents-KR의 보고서 번호(`report_id`)**를 보여준다. 예: `028050_20261106_172435`.
 - `config.reportUrlTemplate`에 `{report_id}`가 들어간 주소를 정하면 번호가 TradingAgents-KR 보고서 화면으로 가는 링크가 된다. 정하지 않으면(null) 글자로만 보인다.
-- 실행 번호(`run_id`)는 화면에 표시하지 않는다.
-- **현재 코드는 `run_id`를 보여주고 `{run_id}`로 링크를 만든다. TradingAgents-KR 보고서 화면은 `report_id`를 쓰므로 링크가 열리지 않는다. 이 명세대로 고쳐야 한다** (12장).
+- 실행 번호(`run_id`)는 화면에 표시하지 않는다 (백엔드도 내려주지 않는다).
+- 링크 주소 예 (TradingAgents-KR 가 같은 컴퓨터에서 떠 있어야 한다): 웹 보고서 화면 `http://localhost:4321/report?id={report_id}` (`npm run dev`), 분석 서버만 켜 둔 경우 HTML 보고서 `http://127.0.0.1:8000/api/reports/{report_id}/download?format=html`. 번호는 주소에 맞게 인코딩해서 넣는다.
+- 주소를 만드는 로직은 DOM 이 없는 `frontend/report.js`(`reportHref`)에 있다. 예시 데이터(`mock.js`)도 같은 모양의 번호(`종목코드_저장일_저장시각`)를 낸다.
 
 ## 8. API 계약
 
@@ -176,7 +178,7 @@
   "foreign_net_5d": -624606, "institution_net_5d": 645940,   // 못 읽으면 null
   "state": "done",                             // pending | running | done | failed
   "analyzed_at": "2026-11-06T01:20:00Z", "error_message": "",
-  "report_id": "028050_20261106_172435",       // 7장: 보고서 번호 (현재 코드는 run_id)
+  "report_id": "028050_20261106_172435",       // 7장: 보고서 번호. 없으면 빈 문자열
   "decision_label": "보유", "score": 0.3, "agents_rated": 10, "agents_total": 10,
   "rank": null                                  // 정리 전 null
 }
@@ -207,7 +209,7 @@
 
 ## 12. 설계 문서와 다른 점 · 고쳐야 할 것
 
-1. **보고서 번호**: 현재 코드는 `run_id`, 이 명세는 `report_id` (7장). 백엔드는 `report_id`를 내려주고, 화면은 `app.js`의 보고서 칸과 `config.js`의 주소 자리표시자를 `report_id`로 바꾼다.
+1. ~~**보고서 번호**: 화면이 `run_id` 를 썼던 것~~ — `report_id` 로 고쳤다 (#27, 7장).
 2. **필터 문구가 고정 글자**다. 조건(5번)이 바뀌어도 화면은 모른다. 백엔드가 세션마다 쓴 조건을 내려주도록 바꿀 수 있고, 지금은 고정 문구로 둔다.
 3. **직전 영업일 계산**은 공휴일을 모른다. 기본값일 뿐이고 사용자가 날짜를 고칠 수 있다.
 4. 예시 모드에서 없는 세션 id로 처리를 부르면 오류가 난다 (예시 모드에서만).

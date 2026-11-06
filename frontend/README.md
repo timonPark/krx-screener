@@ -9,6 +9,7 @@
 | `styles.css` | 색·글꼴 토큰(`:root`)과 컴포넌트 스타일 |
 | `app.js` | 화면 상태, 그리기, 버튼 동작, 처리 중 주기적 갱신 |
 | `api.js` | 백엔드 호출 (경로는 아래 API 계약) |
+| `report.js` | 보고서 링크 주소 만들기 |
 | `mock.js` | 백엔드 없이 보는 예시 API (`?mock=1`) |
 | `config.js` | API 주소, 갱신 간격, 보고서 링크 주소 |
 
@@ -72,7 +73,7 @@ cd frontend && python3 -m http.server 8080     # http://localhost:8080/?mock=1
   "flow_status": "부분",                                             // 양호 | 부분 | 약함 | 미확인
   "foreign_net_5d": -624606, "institution_net_5d": 645940,           // 못 읽으면 null
   "state": "done",                                                   // pending | running | done | failed
-  "analyzed_at": "2026-11-06T01:20:00Z", "error_message": "", "run_id": "610aaf9bfe1b",
+  "analyzed_at": "2026-11-06T01:20:00Z", "error_message": "", "report_id": "028050_20261106_172435",   // 없으면 ""
   "decision_label": "보유", "score": 0.3, "agents_rated": 10, "agents_total": 10,
   "rank": null                                                       // 정리 전 null
 }
@@ -84,4 +85,5 @@ cd frontend && python3 -m http.server 8080     # http://localhost:8080/?mock=1
 - 정리: 대기·처리 중이 하나라도 있으면 막고 "남은 N개"를 보여준다. 실패는 남은 개수에 넣지 않는다.
 - 순위 낡음: `rank_stale` 이면 표 위 안내 띠 + 순위 칸에 "낡음".
 - 색: 등급·점수는 국내 관례(매수·+ 빨강, 매도·− 파랑). 수급 점은 색과 모양(채움·테두리·점선)을 같이 바꾼다.
-- 보고서 번호: `config.reportUrlTemplate` 를 정하면 TradingAgents-KR 보고서로 가는 링크가 된다 (지금은 글자만).
+- 보고서 번호: TradingAgents-KR 의 `report_id`(예: `028050_20261106_172435`)를 보여준다. `config.reportUrlTemplate` 에 `{report_id}` 가 들어간 주소를 정하면 그 보고서 화면으로 가는 링크가 된다
+  (예: `http://localhost:4321/report?id={report_id}`). 정하지 않으면 글자로만 보인다. 서버의 실행 번호(`run_id`)는 나오지 않는다.

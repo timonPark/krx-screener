@@ -4,8 +4,10 @@ export const config = {
   apiBase: '',
   // 처리 중일 때 조회를 다시 부르는 간격(ms)
   pollMs: 10_000,
-  // TradingAgents-KR 보고서 화면 주소. {run_id} 가 보고서 번호로 바뀐다.
-  // null 이면 보고서 번호를 링크 없이 글자로만 보여준다.
+  // TradingAgents-KR 보고서 화면 주소. {report_id} 가 보고서 번호(예: 028050_20261106_172435)로 바뀐다.
+  // null 이면 보고서 번호를 링크 없이 글자로만 보여준다. 예:
+  //   'http://localhost:4321/report?id={report_id}'                                   (TradingAgents-KR 웹 화면, `npm run dev`)
+  //   'http://127.0.0.1:8000/api/reports/{report_id}/download?format=html'            (분석 서버만 켜 두고 HTML 보고서로 바로)
   reportUrlTemplate: null,
   // 종목당 예상 분석 시간(분). 설계 문서 기준 약 5분.
   minutesPerItem: 5,
