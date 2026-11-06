@@ -1,5 +1,6 @@
 import { api, ApiError } from './api.js';
 import { config } from './config.js';
+import { reportHref } from './report.js';
 
 const $ = (id) => document.getElementById(id);
 const state = { sessions: [], sessionId: null, data: null, filter: 'all', sort: 'seq', pollTimer: null, busy: false };
@@ -139,11 +140,12 @@ function statusSub(it) {
   return '';
 }
 
+// 보고서 칸: TradingAgents-KR 의 보고서 번호(report_id). 주소 틀을 정하면 그 보고서 화면으로 가는 링크가 된다.
 function reportCell(it) {
-  if (!it.run_id) return '<span class="faint">—</span>';
-  if (!config.reportUrlTemplate) return `<span class="num" style="font-size:12px">${esc(it.run_id)}</span>`;
-  const href = config.reportUrlTemplate.replace('{run_id}', encodeURIComponent(it.run_id));
-  return `<a class="num" style="font-size:12px" href="${esc(href)}" target="_blank" rel="noopener">${esc(it.run_id)}</a>`;
+  if (!it.report_id) return '<span class="faint">—</span>';
+  const href = reportHref(config.reportUrlTemplate, it.report_id);
+  if (!href) return `<span class="num" style="font-size:12px">${esc(it.report_id)}</span>`;
+  return `<a class="num" style="font-size:12px" href="${esc(href)}" target="_blank" rel="noopener">${esc(it.report_id)}</a>`;
 }
 
 function renderRows(items, total) {

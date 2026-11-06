@@ -21,7 +21,11 @@ const ROWS = [
   ['263860', '지니언스', 'KOSDAQ', 23250, 24033763926, 51.6, '약함', -116682, -91407, '소프트웨어', '네트워크 접근제어(NAC)·보안', ['보유', -0.1, 10]],
 ];
 
-const RUN_IDS = ['610aaf9bfe1b', '295daa56e541', 'd68b8eb44c9c'];
+// 보고서 번호 = 종목코드_저장일_저장시각 (TradingAgents-KR 의 보고서 폴더 이름, 예: 028050_20261106_172435)
+const SEEDED_STAMPS = ['20261106_172435', '20261106_175036', '20261106_181027'];
+const pad = (n) => String(n).padStart(2, '0');
+const stamp = (d = new Date()) =>
+  `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}_${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
 const randId = () => Math.random().toString(16).slice(2, 14).padEnd(12, '0');
 const uuid = () => (crypto.randomUUID ? crypto.randomUUID() : `${randId()}-mock`).replace(/-/g, '');
 
@@ -33,11 +37,11 @@ function makeSession(asOf, seeded) {
       flow_status: r[6], foreign_net_5d: r[7], institution_net_5d: r[8],
       sector_code: '', sector_name: r[9], description: r[10],
       is_caution: false, is_foreign: false,
-      state: 'pending', analyzed_at: null, error_message: '', run_id: '',
+      state: 'pending', analyzed_at: null, error_message: '', report_id: '',
       decision_label: '', score: null, agents_rated: 0, agents_total: 10, rank: null,
       _result: r[11],
     };
-    if (seeded && i < 3) finish(item, RUN_IDS[i]);
+    if (seeded && i < 3) finish(item, SEEDED_STAMPS[i]);
     if (seeded && i === 3) { item.state = 'failed'; item.error_message = '시간 초과 (900초)'; item.analyzed_at = new Date().toISOString(); }
     return item;
   });
@@ -47,11 +51,11 @@ function makeSession(asOf, seeded) {
   };
 }
 
-function finish(item, runId) {
+function finish(item, reportStamp) {
   const res = item._result || ['보유', 0, 10];
   item.state = 'done';
   item.analyzed_at = new Date().toISOString();
-  item.run_id = runId || randId();
+  item.report_id = `${item.code}_${reportStamp || stamp()}`;
   item.decision_label = res[0];
   item.score = res[1];
   item.agents_rated = res[2];
