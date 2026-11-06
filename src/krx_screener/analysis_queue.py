@@ -234,6 +234,10 @@ class AnalysisQueue:
             for r in found
         ]
 
+    def all_rows(self, as_of: str) -> list[QueueRow]:
+        """기준일의 후보 전체 (보관한 종목은 뺀다)."""
+        return self.rows(as_of, _ARCHIVE_BASE - 1)
+
     def archived_codes(self, as_of: str) -> list[str]:
         """후보에서 빠졌지만 끝난 기록이 남아 있는 종목 (종목코드 순)."""
         session_id = self._session_id(as_of)

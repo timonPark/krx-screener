@@ -13,8 +13,9 @@ krx-screener 작업 지침서. 코스피·코스닥 전종목에서 규칙만으
   **쿼터를 쓰므로** `--count` 필수(`--offset` 으로 구간 지정), 실행 전 확인, 한 번에 하나씩, 끝난 종목은 재전송 안 함.
 - 2단계(가벼운 모델)는 범위 밖 (후보가 너무 많을 때만).
 - 1단계 결과는 `results/YYYY-MM-DD/` 의 `candidates.csv` + `run.json` (파일).
-- 3단계 분석 상태는 DB 대기열에 둔다. 설계는 PostgreSQL (`docs/adr/0001-postgres-analysis-queue.md`),
-  현재 코드는 아직 SQLite(`krx-screener.db`)다.
+- 3단계 분석 상태는 DB 대기열에 둔다. 저장소는 PostgreSQL (`docs/adr/0001-postgres-analysis-queue.md`,
+  접속 정보는 환경변수 `KRX_SCREENER_DATABASE_URL`)이고, 명령줄 대기열은 기준일마다 `source = 'cli'` 세션 하나다
+  (`src/krx_screener/analysis_queue.py`, 웹 화면과 같은 저장소).
   `analysis.csv` 는 DB 에서 내보낸 사본이다. `--redo` 가 실패해도 기존 등급은 지우지 않는다.
 - 실행은 수동. `--date` 기본값은 직전 영업일, 시세는 날짜별로 캐시한다.
 - 용어는 `GLOSSARY.md`. 특히 **후보** 는 **등급** 이 아니다.

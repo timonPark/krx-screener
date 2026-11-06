@@ -165,5 +165,5 @@ GET https://stock.naver.com/api/domestic/detail/{종목코드}/detail?codeType=K
 현재 코드는 다음까지 되어 있다. 이 설계는 그 위에서 확장한다.
 - 목록 뽑기(`run`)와 수급, 분석 호출(`analyze`), 대기열 DB, 목록 조회(`list`)는 있다.
 - 없는 것: 세션 UUID, 에이전트별 등급 저장과 평가점수, 순위(정리), 웹 서버(API), 업종·기업 설명, 동시 처리 잠금.
-- 현재 대기열 DB는 **SQLite**다. 이 설계에서는 PostgreSQL로 바꾼다. 저장 코드가 `store.py` 한 파일에 모여 있다.
+- 명령줄 대기열 DB는 PostgreSQL 세션 저장소로 옮겼다 (#12). 기준일마다 `source = 'cli'` 세션 하나이고 `analysis_queue.py` 가 맡는다.
 - 현재 목록의 키는 기준일이고 필터에 RSI 조건이 들어 있다. 이 설계에서는 세션 값이 키이고 RSI 조건이 없다.

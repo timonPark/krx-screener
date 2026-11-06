@@ -6,8 +6,8 @@ from typer.testing import CliRunner
 
 from krx_screener import cli
 from krx_screener.analysis import DONE, FAILED, AnalysisError, AnalysisOutcome
+from krx_screener.analysis_queue import AnalysisQueue
 from krx_screener.results import load_done_analysis, write_analysis
-from krx_screener.store import QueueStore
 
 REPO_CONFIG = Path(__file__).resolve().parents[1] / "config.yaml"
 DATE = "2026-11-05"
@@ -28,6 +28,7 @@ class _Server:
         self.decisions = {"000010": "Buy", "000020": "Hold", "000030": "Overweight"}
         self.errors: set[str] = set()
         self.health_error = False
+        self.on_snapshot = None  # 분석 도중에 호출된다 (진행 상태를 DB 에서 들여다보는 테스트용)
 
 
 @pytest.fixture
@@ -48,12 +49,14 @@ def server(monkeypatch):
 
         def snapshot(self, run_id):
             code = run_id.removeprefix("run-")
+            if srv.on_snapshot:
+                srv.on_snapshot(code)
             if code in srv.errors:
                 return {"status": "error", "error": "boom"}
             return {"status": "done", "decision": srv.decisions[code]}
 
         def report_id(self, run_id):
-            return None  # 이 CLI 는 보고서 번호를 저장하지 않는다 (SQLite 대기열, #12 에서 교체)
+            return f"{run_id.removeprefix('run-')}_20261105_100000"  # 서버가 저장한 보고서 번호 (웹 처리와 같게 대기열에 저장된다)
 
     monkeypatch.setattr(cli, "AnalysisClient", FakeClient)
     return srv
@@ -73,8 +76,7 @@ def _analyze(tmp_path, *args, input_text=None):
     return CliRunner().invoke(
         cli.app,
         [
-            "analyze", "--config", str(REPO_CONFIG), "--out", str(tmp_path / "results"),
-            "--db", str(tmp_path / "q.db"), *args,
+            "analyze", "--config", str(REPO_CONFIG), "--out", str(tmp_path / "results"), *args,
         ],
         input=input_text,
     )
@@ -98,7 +100,7 @@ def test_missing_results_folder(tmp_path, server):
     assert server.started == []
 
 
-def test_sends_only_the_first_n_in_order_and_skips_alphanumeric(tmp_path, server):
+def test_sends_only_the_first_n_in_order_and_skips_alphanumeric(tmp_path, server, queue_db):
     day = _make_results(tmp_path / "results")
     result = _analyze(tmp_path, "--count", "3", "--yes")
     assert result.exit_code == 0, result.output
@@ -122,7 +124,7 @@ def test_sends_only_the_first_n_in_order_and_skips_alphanumeric(tmp_path, server
     assert "투자 성과를 보증하지 않습니다" in text
 
 
-def test_rerun_reuses_finished_analysis_without_asking_or_sending(tmp_path, server):
+def test_rerun_reuses_finished_analysis_without_asking_or_sending(tmp_path, server, queue_db):
     _make_results(tmp_path / "results")
     _analyze(tmp_path, "--count", "3", "--yes")
     sent = list(server.started)
@@ -133,14 +135,14 @@ def test_rerun_reuses_finished_analysis_without_asking_or_sending(tmp_path, serv
     assert "재사용" in _flat(again)
 
 
-def test_redo_sends_again(tmp_path, server):
+def test_redo_sends_again(tmp_path, server, queue_db):
     _make_results(tmp_path / "results")
     _analyze(tmp_path, "--count", "1", "--yes")
     _analyze(tmp_path, "--count", "1", "--yes", "--redo")
     assert server.started == [("000010", DATE, "low")] * 2
 
 
-def test_declining_the_confirmation_sends_nothing(tmp_path, server):
+def test_declining_the_confirmation_sends_nothing(tmp_path, server, queue_db):
     day = _make_results(tmp_path / "results")
     result = _analyze(tmp_path, "--count", "2", input_text="n\n")
     assert result.exit_code == 1
@@ -149,7 +151,7 @@ def test_declining_the_confirmation_sends_nothing(tmp_path, server):
     assert not (day / "analysis.csv").exists()
 
 
-def test_confirmation_names_quota_use(tmp_path, server):
+def test_confirmation_names_quota_use(tmp_path, server, queue_db):
     _make_results(tmp_path / "results")
     result = _analyze(tmp_path, "--count", "1", input_text="y\n")
     assert result.exit_code == 0, result.output
@@ -157,7 +159,7 @@ def test_confirmation_names_quota_use(tmp_path, server):
     assert server.started == [("000010", DATE, "low")]
 
 
-def test_server_down_stops_before_sending(tmp_path, server):
+def test_server_down_stops_before_sending(tmp_path, server, queue_db):
     day = _make_results(tmp_path / "results")
     server.health_error = True
     result = _analyze(tmp_path, "--count", "2", "--yes")
@@ -167,7 +169,7 @@ def test_server_down_stops_before_sending(tmp_path, server):
     assert not (day / "analysis.csv").exists()
 
 
-def test_one_failure_does_not_stop_the_rest_and_is_recorded(tmp_path, server):
+def test_one_failure_does_not_stop_the_rest_and_is_recorded(tmp_path, server, queue_db):
     day = _make_results(tmp_path / "results")
     server.errors.add("000010")
     result = _analyze(tmp_path, "--count", "4", "--yes")
@@ -178,16 +180,15 @@ def test_one_failure_does_not_stop_the_rest_and_is_recorded(tmp_path, server):
     assert "boom" in rows["000010"]["message"]
     assert rows["000030"]["decision"] == "Overweight"
     # 오류 난 종목은 다음 실행에서 다시 보낸다 (완료된 것만 재사용)
-    with QueueStore(tmp_path / "q.db") as store:
-        states = {r.code: r.state for r in store.rows(DATE, 10)}
-    assert states == {"000010": "error", "0126Z0": "skipped", "000020": "done", "000030": "done"}
+    states = {r.code: r.state for r in AnalysisQueue(queue_db).rows(DATE, 10)}
+    assert states == {"000010": "failed", "0126Z0": "failed", "000020": "done", "000030": "done"}  # 오류·건너뜀은 실패 + 사유
     server.errors.clear()
     again = _analyze(tmp_path, "--count", "4", "--yes")
     assert again.exit_code == 0, again.output
     assert [s[0] for s in server.started][3:] == ["000010"]  # 오류 난 하나만 다시 보냄
 
 
-def test_defaults_to_latest_results_folder(tmp_path, server):
+def test_defaults_to_latest_results_folder(tmp_path, server, queue_db):
     _make_results(tmp_path / "results", "2026-11-04")
     _make_results(tmp_path / "results", "2026-11-05")
     (tmp_path / "results" / "not-a-date").mkdir()
@@ -241,25 +242,24 @@ def test_load_done_analysis_tolerates_missing_or_corrupt_files(tmp_path):
 # --- DB 대기열 동작 ---
 
 
-def _db_rows(tmp_path):
-    with QueueStore(tmp_path / "q.db") as store:
-        return {r.code: r for r in store.rows(DATE, 100)}
+def _db_rows(queue_db):
+    return {r.code: r for r in AnalysisQueue(queue_db).rows(DATE, 100)}
 
 
-def test_progress_is_written_to_the_db_as_each_stock_finishes(tmp_path, server):
+def test_progress_is_written_to_the_db_as_each_stock_finishes(tmp_path, server, queue_db):
     _make_results(tmp_path / "results")
     result = _analyze(tmp_path, "--count", "4", "--yes")
     assert result.exit_code == 0, result.output
-    rows = _db_rows(tmp_path)
+    rows = _db_rows(queue_db)
     assert rows["000010"].state == "done" and rows["000010"].decision == "Buy"
-    assert rows["000010"].effort == "low" and rows["000010"].run_id == "run-000010"
-    assert rows["0126Z0"].state == "skipped"
+    assert rows["000010"].report_id == "000010_20261105_100000"  # 웹 처리와 같게 보고서 번호가 저장된다
+    assert rows["0126Z0"].state == "failed" and "6자리" in rows["0126Z0"].message  # 서버가 받지 않는 코드는 보내지 않는다
     assert rows["000030"].decision == "Overweight"
     assert [rows[c].rank for c in ("000010", "0126Z0", "000020", "000030")] == [1, 2, 3, 4]
     assert rows["000010"].flow_status == "양호"
 
 
-def test_next_run_continues_with_what_is_not_finished(tmp_path, server):
+def test_next_run_continues_with_what_is_not_finished(tmp_path, server, queue_db):
     _make_results(tmp_path / "results")
     _analyze(tmp_path, "--count", "1", "--yes")  # 첫 종목만 끝낸 상태
     assert [s[0] for s in server.started] == ["000010"]
@@ -269,7 +269,7 @@ def test_next_run_continues_with_what_is_not_finished(tmp_path, server):
     assert "재사용" in _flat(again)
 
 
-def test_dry_run_lists_without_connecting_or_changing_analysis_state(tmp_path, server):
+def test_dry_run_lists_without_connecting_or_changing_analysis_state(tmp_path, server, queue_db):
     day = _make_results(tmp_path / "results")
     _analyze(tmp_path, "--count", "1", "--yes")  # 소요 시간 기록용으로 하나 끝낸다
     sent = list(server.started)
@@ -284,12 +284,12 @@ def test_dry_run_lists_without_connecting_or_changing_analysis_state(tmp_path, s
     assert "예상 소요" in text
     assert "쿼터를 쓰지 않았습니다" in text
     assert server.started == sent
-    rows = _db_rows(tmp_path)
+    rows = _db_rows(queue_db)
     assert rows["000020"].state == "pending"
     assert (day / "analysis.csv").exists()  # 이전 실행의 내보내기 그대로
 
 
-def test_dry_run_without_any_finished_analysis_cannot_estimate(tmp_path, server):
+def test_dry_run_without_any_finished_analysis_cannot_estimate(tmp_path, server, queue_db):
     _make_results(tmp_path / "results")
     result = _analyze(tmp_path, "--count", "4", "--dry-run")
     assert result.exit_code == 0, result.output
@@ -297,75 +297,75 @@ def test_dry_run_without_any_finished_analysis_cannot_estimate(tmp_path, server)
     assert server.started == []
 
 
-def test_dry_run_with_redo_lists_finished_ones_but_changes_nothing(tmp_path, server):
+def test_dry_run_with_redo_lists_finished_ones_but_changes_nothing(tmp_path, server, queue_db):
     _make_results(tmp_path / "results")
     _analyze(tmp_path, "--count", "1", "--yes")
     result = _analyze(tmp_path, "--count", "1", "--dry-run", "--redo")
     assert "분석에 보낼 목록 1개" in _flat(result)
-    assert _db_rows(tmp_path)["000010"].state == "done"
+    assert _db_rows(queue_db)["000010"].state == "done"
 
 
-def test_failed_redo_keeps_the_existing_rating(tmp_path, server):
+def test_failed_redo_keeps_the_existing_rating(tmp_path, server, queue_db):
     day = _make_results(tmp_path / "results")
     _analyze(tmp_path, "--count", "1", "--yes")
     server.errors.add("000010")  # 다시 분석하다 오류가 나는 상황
     result = _analyze(tmp_path, "--count", "1", "--yes", "--redo")
     assert result.exit_code == 0, result.output
     assert "기존 등급 유지" in _flat(result)
-    row = _db_rows(tmp_path)["000010"]
+    row = _db_rows(queue_db)["000010"]
     assert (row.state, row.decision) == ("done", "Buy")
     assert "Buy" in (day / "analysis.csv").read_text(encoding="utf-8-sig")
 
 
-def test_successful_redo_replaces_the_rating(tmp_path, server):
+def test_successful_redo_replaces_the_rating(tmp_path, server, queue_db):
     _make_results(tmp_path / "results")
     _analyze(tmp_path, "--count", "1", "--yes")
     server.decisions["000010"] = "Sell"
     _analyze(tmp_path, "--count", "1", "--yes", "--redo")
-    row = _db_rows(tmp_path)["000010"]
+    row = _db_rows(queue_db)["000010"]
     assert (row.state, row.decision) == ("done", "Sell")
 
 
-def test_confirm_decline_with_redo_leaves_finished_result_untouched(tmp_path, server):
+def test_confirm_decline_with_redo_leaves_finished_result_untouched(tmp_path, server, queue_db):
     _make_results(tmp_path / "results")
     _analyze(tmp_path, "--count", "1", "--yes")
     declined = _analyze(tmp_path, "--count", "1", "--redo", input_text="n\n")
     assert declined.exit_code == 1
-    row = _db_rows(tmp_path)["000010"]
+    row = _db_rows(queue_db)["000010"]
     assert (row.state, row.decision) == ("done", "Buy")
 
 
-def test_legacy_analysis_csv_is_imported_once_on_first_registration(tmp_path, server):
+def test_legacy_analysis_csv_is_imported_once_on_first_registration(tmp_path, server, queue_db):
     day = _make_results(tmp_path / "results")
-    write_analysis(day, [AnalysisOutcome("000010", "가나다전자", DONE, decision="Hold", run_id="old", elapsed_seconds=300)])
+    write_analysis(day, [AnalysisOutcome("000010", "가나다전자", DONE, decision="Hold", report_id="000010_20261104_090000", elapsed_seconds=300)])
     result = _analyze(tmp_path, "--count", "1", "--yes")
     assert result.exit_code == 0, result.output
     assert server.started == []  # DB 도입 전에 끝난 결과는 다시 보내지 않는다
-    row = _db_rows(tmp_path)["000010"]
-    assert (row.state, row.decision, row.run_id) == ("done", "Hold", "old")
+    row = _db_rows(queue_db)["000010"]
+    assert (row.state, row.decision, row.report_id) == ("done", "Hold", "000010_20261104_090000")
 
 
-def test_rerunning_the_same_candidates_does_not_reset_state(tmp_path, server):
+def test_rerunning_the_same_candidates_does_not_reset_state(tmp_path, server, queue_db):
     _make_results(tmp_path / "results")
     _analyze(tmp_path, "--count", "1", "--yes")
     _analyze(tmp_path, "--count", "1", "--dry-run")  # 목록을 다시 등록해도
-    assert _db_rows(tmp_path)["000010"].state == "done"
+    assert _db_rows(queue_db)["000010"].state == "done"
 
 
 # --- --offset / --count: 목록의 원하는 구간만 ---
 
 
-def test_offset_skips_the_first_positions(tmp_path, server):
+def test_offset_skips_the_first_positions(tmp_path, server, queue_db):
     _make_results(tmp_path / "results")
     result = _analyze(tmp_path, "--offset", "2", "--count", "2", "--yes")
     assert result.exit_code == 0, result.output
     # 3~4번(라마바화학, 사아자증권)만 보내고 1번은 건드리지 않는다
     assert [s[0] for s in server.started] == ["000020", "000030"]
-    assert _db_rows(tmp_path)["000010"].state == "pending"
+    assert _db_rows(queue_db)["000010"].state == "pending"
     assert "3~4번" in _flat(result)
 
 
-def test_offset_counts_positions_in_the_whole_list_including_unsendable(tmp_path, server):
+def test_offset_counts_positions_in_the_whole_list_including_unsendable(tmp_path, server, queue_db):
     _make_results(tmp_path / "results")
     # 2번은 영숫자 코드라 보내지 않지만 순번은 차지한다
     result = _analyze(tmp_path, "--offset", "1", "--count", "1", "--yes")
@@ -374,7 +374,7 @@ def test_offset_counts_positions_in_the_whole_list_including_unsendable(tmp_path
     assert "건너뜀" in _flat(result)
 
 
-def test_next_page_hint_tells_the_command_to_run_next(tmp_path, server):
+def test_next_page_hint_tells_the_command_to_run_next(tmp_path, server, queue_db):
     _make_results(tmp_path / "results")
     first = _analyze(tmp_path, "--offset", "0", "--count", "2", "--yes")
     assert "--offset 2 --count 2" in _flat(first)
@@ -382,7 +382,7 @@ def test_next_page_hint_tells_the_command_to_run_next(tmp_path, server):
     assert "목록 끝까지 왔습니다" in _flat(last)
 
 
-def test_window_reuses_finished_ones_and_sends_the_rest(tmp_path, server):
+def test_window_reuses_finished_ones_and_sends_the_rest(tmp_path, server, queue_db):
     _make_results(tmp_path / "results")
     _analyze(tmp_path, "--offset", "0", "--count", "1", "--yes")
     again = _analyze(tmp_path, "--offset", "0", "--count", "4", "--yes")
@@ -391,7 +391,7 @@ def test_window_reuses_finished_ones_and_sends_the_rest(tmp_path, server):
     assert "재사용" in _flat(again)
 
 
-def test_offset_past_the_end_sends_nothing(tmp_path, server):
+def test_offset_past_the_end_sends_nothing(tmp_path, server, queue_db):
     _make_results(tmp_path / "results")
     result = _analyze(tmp_path, "--offset", "10", "--count", "5", "--yes")
     assert result.exit_code == 0, result.output
@@ -399,7 +399,7 @@ def test_offset_past_the_end_sends_nothing(tmp_path, server):
     assert server.started == []
 
 
-def test_offset_dry_run_shows_only_that_window(tmp_path, server):
+def test_offset_dry_run_shows_only_that_window(tmp_path, server, queue_db):
     _make_results(tmp_path / "results")
     result = _analyze(tmp_path, "--offset", "2", "--count", "1", "--dry-run")
     assert result.exit_code == 0, result.output

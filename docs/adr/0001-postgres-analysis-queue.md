@@ -14,4 +14,7 @@
 - 같은 세션 동시 처리 금지는 Postgres의 세션 단위 잠금(advisory lock)으로 한다. 잠금을 잡은 연결이 끊기면 자동으로 풀려서, 처리가 죽어도 잠금이 남지 않는다.
 - 재분석이 실패해도 이미 있는 등급은 지우지 않는다 (이전 결정 유지).
 - DB에는 다시 만들 수 없는 분석 결과가 들어간다. 백업은 사용자가 한다.
-- 현재 코드의 저장소(`src/krx_screener/store.py`)는 SQLite이고, 구현할 때 교체한다. 저장 코드가 이 파일에 모여 있다.
+- 명령줄(`run`·`analyze`·`list`)의 분석 대기열도 같은 PostgreSQL 세션 저장소로 옮겼다 (#12). SQLite 저장소(`store.py`)와 `--db` 옵션은 없어졌다.
+  대기열은 기준일마다 `source = 'cli'` 세션 하나이고(`src/krx_screener/analysis_queue.py`), 웹 화면의 세션 목록에도 보인다.
+  후보에서 빠진 끝난 분석은 지우지 않고 보관(`archived`)한다. 기존 SQLite 파일(`krx-screener.db`)은 변환하지 않는다: 그 안의 시범 결과 3개는
+  `results/<기준일>/analysis.csv`(DB 에서 내보낸 사본)에 있어서, 그 기준일을 처음 등록할 때 자동으로 가져온다.

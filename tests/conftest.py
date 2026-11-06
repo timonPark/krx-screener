@@ -85,3 +85,14 @@ def hold_lock(pg_conn):
     yield hold
     for conn in held:
         conn.close()
+
+
+@pytest.fixture
+def queue_db(pg_conn, monkeypatch, tmp_path):
+    """명령줄 분석 대기열용: 테스트 DB 를 환경변수로 가리키고, 분석 상태 로그 폴더를 임시 폴더로 둔다.
+
+    명령(`run`·`analyze`·`list`)은 자기 연결을 열어 환경변수의 접속 정보로 DB 에 닿는다. 돌려주는 연결은 결과를 확인하는 데 쓴다.
+    """
+    monkeypatch.setenv(db.ENV_URL, os.environ[TEST_URL_ENV])
+    monkeypatch.setenv("TRADINGAGENTS_RESULTS_DIR", str(tmp_path / "state_logs"))
+    return pg_conn

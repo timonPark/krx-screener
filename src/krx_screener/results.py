@@ -81,7 +81,7 @@ def write_results(
 ANALYSIS_FILE = "analysis.csv"
 _ANALYSIS_COLUMNS = [
     "code", "name", "status", "decision", "decision_label", "is_target",
-    "run_id", "elapsed_seconds", "message",
+    "report_id", "elapsed_seconds", "message",
 ]
 
 
@@ -101,7 +101,7 @@ def write_analysis(out_dir: Path, outcomes: list[AnalysisOutcome]) -> Path:
                     "decision": o.decision or "",
                     "decision_label": rating_label(o.decision),
                     "is_target": o.is_target,
-                    "run_id": o.run_id,
+                    "report_id": o.report_id,  # 서버의 실행 번호(run_id)는 서버 메모리에만 있어 저장하지 않는다
                     "elapsed_seconds": round(o.elapsed_seconds, 1),
                     "message": o.message,
                 }
@@ -125,7 +125,7 @@ def load_done_analysis(out_dir: Path) -> dict[str, AnalysisOutcome]:
                     name=row.get("name", ""),
                     status=DONE,
                     decision=row["decision"],
-                    run_id=row.get("run_id", ""),
+                    report_id=row.get("report_id", ""),  # 이전 파일의 run_id 열은 읽지 않는다
                     elapsed_seconds=float(row.get("elapsed_seconds") or 0),
                     message=row.get("message", ""),
                 )
