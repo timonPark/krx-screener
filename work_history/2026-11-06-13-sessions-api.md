@@ -28,7 +28,7 @@
 
 ## 검증 결과
 
-- `pytest`: 테스트 DB 연결 시 **269 passed**, DB 없이 **213 passed, 56 skipped**. `ruff` 통과.
+- `pytest`: 테스트 DB 연결 시 **270 passed**, DB 없이 **214 passed, 56 skipped**. `ruff` 통과.
 - 완료 조건 대조(모두 웹 API 경계 테스트):
   - 새 세션마다 UUID 가 다르다 ✓ (같은 날 두 번, UUID v4)
   - 응답이 계약(`id`, `as_of`, `created_at`, `total`)을 따른다 ✓
