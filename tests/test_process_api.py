@@ -216,3 +216,54 @@ def test_when_the_database_is_down_it_is_a_korean_503(tmp_path):
     response = TestClient(create_app(deps)).post(f"/api/sessions/{uuid.uuid4()}/process", json={"offset": 0, "count": 1})
     assert response.status_code == 503
     assert response.json() == {"detail": "PostgreSQL 에 연결하지 못했습니다 (127.0.0.1:1/krx)."}
+
+
+# --- 보고서 번호 (#20) ---
+
+
+def test_the_report_id_of_a_finished_stock_is_saved_and_shown(client, repo):
+    session = seed(repo)
+    swap_server(client, FakeAnalysisServer(report_ids={"000010": "000010_20261106_172435"}))
+    post(client, session.id, offset=0, count=2)
+    assert repo.get_item(session.id, "000010").report_id == "000010_20261106_172435"
+    assert repo.get_item(session.id, "000020").report_id == "000020_20261106_100000"  # 종목마다 자기 번호
+    items = client.get(f"/api/sessions/{session.id}").json()["items"]
+    assert [i["report_id"] for i in items[:3]] == ["000010_20261106_172435", "000020_20261106_100000", ""]
+
+
+def test_the_run_id_is_never_exposed(client, repo):
+    session = seed(repo)
+    post(client, session.id, offset=0, count=1)
+    assert "run-" not in client.get(f"/api/sessions/{session.id}").text  # 가짜 서버의 run_id 는 run-<종목코드>
+
+
+def test_a_failed_stock_has_no_report_id(client, repo):
+    session = seed(repo)
+    swap_server(client, FakeAnalysisServer(errors=["000010"]))
+    post(client, session.id, offset=0, count=1)
+    assert repo.get_item(session.id, "000010").report_id == ""
+
+
+def test_when_the_report_id_cannot_be_read_the_grade_is_still_saved(client, repo):
+    session = seed(repo)
+    swap_server(client, FakeAnalysisServer(decisions={"000010": "Buy"}, report_error="서버가 이 분석을 찾지 못합니다."))
+    post(client, session.id, offset=0, count=1)
+    item = repo.get_item(session.id, "000010")
+    assert (item.state, item.decision, item.report_id, item.error_message) == ("done", "Buy", "", "")  # 번호만 비고 실패가 아니다
+
+
+def test_a_run_that_saved_no_report_has_an_empty_report_id(client, repo):
+    session = seed(repo)
+    swap_server(client, FakeAnalysisServer(report_ids={"000010": None}))
+    post(client, session.id, offset=0, count=1)
+    item = repo.get_item(session.id, "000010")
+    assert (item.state, item.report_id) == ("done", "")
+
+
+def test_a_successful_reanalysis_replaces_the_report_id(client, repo):
+    session = seed(repo)
+    repo.mark_done(session.id, "000010", decision="Buy", score=1.0, agents_rated=10, agents_total=10, report_id="000010_20261101_090000")
+    repo.mark_failed(session.id, "000010", "이전 재분석 실패")
+    swap_server(client, FakeAnalysisServer(report_ids={"000010": "000010_20261106_172435"}))
+    post(client, session.id, offset=0, count=1)
+    assert repo.get_item(session.id, "000010").report_id == "000010_20261106_172435"

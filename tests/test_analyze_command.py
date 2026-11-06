@@ -52,6 +52,9 @@ def server(monkeypatch):
                 return {"status": "error", "error": "boom"}
             return {"status": "done", "decision": srv.decisions[code]}
 
+        def report_id(self, run_id):
+            return None  # 이 CLI 는 보고서 번호를 저장하지 않는다 (SQLite 대기열, #12 에서 교체)
+
     monkeypatch.setattr(cli, "AnalysisClient", FakeClient)
     return srv
 
