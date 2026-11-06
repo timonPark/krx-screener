@@ -53,7 +53,7 @@ def test_a_range_is_sent_in_order_one_at_a_time_and_the_results_are_saved(client
         "000010": "pending", "000020": "done", "000030": "done", "000040": "pending", "000050": "pending",
     }
     done = repo.get_item(session.id, "000020")
-    assert (done.decision, done.score, done.error_message) == ("Hold", None, "")  # 점수는 #22 가 채운다
+    assert (done.decision, done.score, done.error_message) == ("Hold", 0, "")  # 가짜 서버의 에이전트는 모두 보유 → 점수 0
     assert done.analyzed_at is not None
 
 
@@ -335,13 +335,6 @@ def test_the_ratings_of_one_stock_do_not_change_the_others(client, repo):
     assert repo.agent_ratings(session.id, "000020") == {}  # 처리하지 않은 종목
 
 
-def test_the_session_view_is_unchanged_by_agent_ratings(client, repo):
-    session = seed(repo)
-    post(client, session.id, offset=0, count=1)
-    item = client.get(f"/api/sessions/{session.id}").json()["items"][0]
-    assert (item["score"], item["agents_rated"], item["agents_total"]) == (None, 0, 0)  # 점수와 개수는 #22 가 채운다
-
-
 def test_if_saving_the_agent_ratings_fails_the_stock_is_not_half_done(client, repo, monkeypatch):
     from krx_screener.repository import SessionRepository
 
@@ -354,3 +347,84 @@ def test_if_saving_the_agent_ratings_fails_the_stock_is_not_half_done(client, re
     item = repo.get_item(session.id, "000010")
     assert (item.state, item.decision) == ("failed", "")  # 완료 표시와 등급이 함께 취소된다
     assert "처리 중 오류" in item.error_message
+
+
+# --- 평가점수 (#22) ---
+
+
+def view_item(client, session, index=0):
+    return client.get(f"/api/sessions/{session.id}").json()["items"][index]
+
+
+def test_the_score_is_the_average_of_the_agent_ratings_and_the_count_is_saved(client, repo):
+    session = seed(repo)
+    ratings = {"market": "Buy", "news": "Overweight", "bull": "Buy", "bear": "Sell"}  # 나머지 6개는 기본 Hold(0)
+    swap_server(client, FakeAnalysisServer(agent_ratings={"000010": ratings}))
+    post(client, session.id, offset=0, count=2)
+    item = repo.get_item(session.id, "000010")
+    assert (item.score, item.agents_rated, item.agents_total) == (3 / 10, 10, 10)  # (2+1+2−2 + 0×6) / 10
+    other = repo.get_item(session.id, "000020")
+    assert (other.score, other.agents_rated, other.agents_total) == (0, 10, 10)  # 모두 보유면 0
+
+
+def test_all_buy_is_plus_two(client, repo):
+    session = seed(repo)
+    from krx_screener.agent_ratings import AGENT_FIELDS
+
+    swap_server(client, FakeAnalysisServer(agent_ratings={"000010": dict.fromkeys(AGENT_FIELDS, "Buy")}))
+    post(client, session.id, offset=0, count=1)
+    assert repo.get_item(session.id, "000010").score == 2
+
+
+def test_agents_that_could_not_be_read_are_left_out_and_the_count_says_how_many_were_used(client, repo):
+    session = seed(repo)
+    unread = dict.fromkeys(["news", "fundamentals", "bear", "neutral", "aggressive", "conservative"])  # 6개 칸이 비었다
+    swap_server(client, FakeAnalysisServer(agent_ratings={"000010": {"market": "Buy", "bull": "Overweight", **unread}}))
+    post(client, session.id, offset=0, count=1)
+    item = repo.get_item(session.id, "000010")
+    # 읽은 건 market(+2), bull(+1), research_manager·portfolio_manager(기본 Hold 0) 4개 → (2+1+0+0)/4. 빈 칸을 0 으로 치지 않는다
+    assert (item.score, item.agents_rated, item.agents_total) == (3 / 4, 4, 10)
+
+
+def test_when_no_agent_could_be_read_the_score_is_empty_but_the_grade_is_saved(client, repo, tmp_path):
+    session = seed(repo)
+    server = swap_server(client, FakeAnalysisServer(decisions={"000010": "Buy"}))
+    server.state_log_root = tmp_path / "서버가-쓰는-다른-폴더"  # 로그를 읽을 수 없다
+    post(client, session.id, offset=0, count=1)
+    item = repo.get_item(session.id, "000010")
+    assert (item.state, item.decision) == ("done", "Buy")
+    assert (item.score, item.agents_rated, item.agents_total) == (None, 0, 10)  # 점수를 지어내지 않는다 (0 이 아니다)
+
+
+def test_the_score_comes_from_the_agent_ratings_not_from_the_final_decision(client, repo):
+    session = seed(repo)
+    swap_server(client, FakeAnalysisServer(decisions={"000010": "Buy"}))  # 최종 등급은 매수, 에이전트는 모두 보유
+    post(client, session.id, offset=0, count=1)
+    item = repo.get_item(session.id, "000010")
+    assert (item.decision, item.score) == ("Buy", 0)
+
+
+def test_the_session_view_shows_the_score_and_the_counts(client, repo):
+    session = seed(repo)
+    swap_server(client, FakeAnalysisServer(agent_ratings={"000010": {"market": "Buy", "news": "Buy"}}))
+    post(client, session.id, offset=0, count=1)
+    done, pending = view_item(client, session, 0), view_item(client, session, 1)
+    assert (done["score"], done["agents_rated"], done["agents_total"]) == (4 / 10, 10, 10)  # (2+2+0×8)/10
+    assert (pending["score"], pending["agents_rated"], pending["agents_total"]) == (None, 0, 0)  # 처리 전
+
+
+def test_a_successful_reanalysis_replaces_the_score(client, repo):
+    session = seed(repo)
+    repo.mark_done(session.id, "000010", decision="Buy", score=2.0, agents_rated=10, agents_total=10)
+    repo.mark_failed(session.id, "000010", "이전 재분석 실패")
+    swap_server(client, FakeAnalysisServer(agent_ratings={"000010": {"market": "Sell"}}))
+    post(client, session.id, offset=0, count=1)
+    assert repo.get_item(session.id, "000010").score == -2 / 10
+
+
+def test_a_failed_stock_gets_no_score(client, repo):
+    session = seed(repo)
+    swap_server(client, FakeAnalysisServer(errors=["000010"]))
+    post(client, session.id, offset=0, count=1)
+    item = repo.get_item(session.id, "000010")
+    assert (item.state, item.score, item.agents_rated, item.agents_total) == ("failed", None, 0, 0)
