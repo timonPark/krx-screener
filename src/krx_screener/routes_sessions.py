@@ -2,6 +2,7 @@
 
 - ``POST /api/sessions``  ``{"as_of": "2026-11-05"}`` → 새 세션 (201)
 - ``GET  /api/sessions``  → 최근 순 세션 목록
+- ``GET  /api/sessions/{id}``  (``id`` 에 ``latest`` 가능) → 세션 전체 조회 (#23)
 
 기준일은 거래일이어야 한다. 입력이 잘못되면 422, 거래일이나 전종목 목록을 받을 수 없는 외부 장애면 503 이고,
 둘 다 ``{"detail": "한국어 메시지"}`` 다.
@@ -13,20 +14,30 @@
 
 from __future__ import annotations
 
-from datetime import UTC, date
+import uuid
+from datetime import UTC, date, datetime
 
 from fastapi import APIRouter, Request
 from pydantic import BaseModel
 
+from krx_screener.analysis import RATING_LABELS, REVIEW
 from krx_screener.asof import resolve_as_of
+from krx_screener.flow import STATUS_LABELS
 from krx_screener.listing import build_items
-from krx_screener.repository import Session, SessionRepository
+from krx_screener.repository import Item, NotFoundError, Session, SessionRepository
 
 router = APIRouter(prefix="/api/sessions")
 
 
 class SessionCreate(BaseModel):
     as_of: date
+
+
+def _utc(moment: datetime | None) -> str | None:
+    """UTC 문자열 (예: 2026-11-06T00:12:00Z). 화면이 한국 시각으로 바꿔 보여준다."""
+    if moment is None:
+        return None
+    return moment.astimezone(UTC).isoformat(timespec="seconds").replace("+00:00", "Z")
 
 
 class SessionOut(BaseModel):
@@ -37,8 +48,67 @@ class SessionOut(BaseModel):
 
     @classmethod
     def of(cls, session: Session) -> SessionOut:
-        created = session.created_at.astimezone(UTC).isoformat(timespec="seconds").replace("+00:00", "Z")
-        return cls(id=str(session.id), as_of=session.as_of, created_at=created, total=session.total)
+        return cls(id=str(session.id), as_of=session.as_of, created_at=_utc(session.created_at), total=session.total)
+
+
+class ItemOut(BaseModel):
+    """종목 한 줄. 키는 영어, 사용자에게 보이는 값(수급 상태, 등급)은 한국어다 (저장은 영어 코드값)."""
+
+    seq: int
+    code: str
+    name: str
+    market: str
+    sector_code: str
+    sector_name: str
+    description: str
+    is_caution: bool
+    is_foreign: bool
+    close: int | None
+    avg_trading_value: int | None
+    rsi: float | None
+    flow_status: str  # 양호 | 부분 | 약함 | 미확인
+    foreign_net_5d: int | None
+    institution_net_5d: int | None
+    state: str  # pending | running | done | failed
+    analyzed_at: str | None
+    error_message: str
+    report_id: str
+    decision_label: str  # 매수 | 비중 확대 | 보유 | 비중 축소 | 매도 | REVIEW | 빈 문자열
+    score: float | None
+    agents_rated: int
+    agents_total: int
+    rank: int | None
+
+    @classmethod
+    def of(cls, item: Item) -> ItemOut:
+        return cls(
+            seq=item.seq, code=item.code, name=item.name, market=item.market,
+            sector_code=item.sector_code, sector_name=item.sector_name, description=item.description,
+            is_caution=item.is_caution, is_foreign=item.is_foreign,
+            close=item.close, avg_trading_value=item.avg_trading_value, rsi=item.rsi,
+            flow_status=STATUS_LABELS.get(item.flow_status, STATUS_LABELS["unconfirmed"]),
+            foreign_net_5d=item.foreign_net_5d, institution_net_5d=item.institution_net_5d,
+            state=item.state, analyzed_at=_utc(item.analyzed_at), error_message=item.error_message,
+            report_id=item.report_id,
+            decision_label=item.decision if item.decision == REVIEW else RATING_LABELS.get(item.decision, ""),
+            score=item.score, agents_rated=item.agents_rated, agents_total=item.agents_total, rank=item.rank,
+        )
+
+
+class CountsOut(BaseModel):
+    pending: int
+    running: int
+    done: int
+    failed: int
+
+
+class SessionDetailOut(BaseModel):
+    session: SessionOut
+    processing: bool  # 이 세션을 처리 중인지. true 면 화면이 주기적으로 다시 부른다
+    ranked_at: str | None  # 정리를 실행한 시각, 안 했으면 null
+    rank_stale: bool  # 정리 이후 재분석된 종목이 있으면 true
+    counts: CountsOut
+    items: list[ItemOut]  # 세션 전체, 순번 순
 
 
 @router.post("", status_code=201, response_model=SessionOut)
@@ -69,3 +139,32 @@ def list_sessions(request: Request) -> list[SessionOut]:
     with request.app.state.deps.connect() as conn:
         return [SessionOut.of(s) for s in SessionRepository(conn).list_sessions()]
 
+
+
+@router.get("/{session_id}", response_model=SessionDetailOut)
+def get_session(session_id: str, request: Request) -> SessionDetailOut:
+    """세션 전체를 처리 여부와 함께 조회한다. ``latest`` 는 가장 최근 세션이다."""
+    with request.app.state.deps.connect() as conn:
+        repo = SessionRepository(conn)
+        if session_id == "latest":
+            session = repo.latest_session()
+            if session is None:
+                raise NotFoundError("세션이 없습니다. 먼저 새 목록을 뽑으세요.")
+        else:
+            try:
+                session = repo.get_session(uuid.UUID(session_id))
+            except ValueError:
+                session = None  # 형식이 UUID 가 아니면 없는 세션과 같게 다룬다
+            if session is None:
+                raise NotFoundError("세션을 찾지 못했습니다.")
+        counts = repo.counts(session.id)
+        items = repo.items(session.id)
+    return SessionDetailOut(
+        session=SessionOut.of(session),
+        # 처리 중 표시는 지금은 실행 중인 종목이 있는지로 정한다. 세션 단위 잠금(#18)이 생기면 잠금 상태를 따른다.
+        processing=counts["running"] > 0,
+        ranked_at=_utc(session.ranked_at),
+        rank_stale=False,  # 정리(#24) 이후 재분석 여부는 #25 가 계산한다
+        counts=CountsOut(**counts),
+        items=[ItemOut.of(i) for i in items],
+    )
