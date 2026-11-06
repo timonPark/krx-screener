@@ -9,10 +9,10 @@ from datetime import date
 
 import pytest
 from fakes import write_state_log
-from krx_screener.analysis_queue import AnalysisQueue, QueueEntry
 
 from krx_screener import db
 from krx_screener.analysis import DONE, FAILED, SKIPPED, TIMEOUT, AnalysisOutcome
+from krx_screener.analysis_queue import AnalysisQueue, QueueEntry
 from krx_screener.repository import Item, NotFoundError, SessionRepository
 
 D = "2026-11-05"
