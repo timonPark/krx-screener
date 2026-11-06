@@ -17,6 +17,10 @@ class AsOfError(ValueError):
     """기준일을 정하지 못했을 때. 메시지는 사용자에게 그대로 보여준다."""
 
 
+class AsOfUnavailableError(AsOfError):
+    """입력 잘못이 아니라 거래일을 확인할 수 없을 때 (시세 조회 실패 같은 외부 장애)."""
+
+
 def resolve_as_of(today: date, requested: date | None, fetcher: Fetcher) -> date:
     """기준일을 돌려준다. 지정하지 않으면 오늘 이전의 마지막 거래일."""
     if requested is not None and requested > today:
@@ -26,7 +30,7 @@ def resolve_as_of(today: date, requested: date | None, fetcher: Fetcher) -> date
     try:
         frame = normalize(fetcher(REFERENCE_CODE, anchor - timedelta(days=14), anchor))
     except PriceFetchError as exc:
-        raise AsOfError(f"거래일을 확인하지 못했습니다 (삼성전자 시세 조회 실패: {exc})") from exc
+        raise AsOfUnavailableError(f"거래일을 확인하지 못했습니다 (삼성전자 시세 조회 실패: {exc})") from exc
 
     days = sorted({ts.date() for ts in frame.index})
     if requested is not None:

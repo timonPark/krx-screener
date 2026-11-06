@@ -3,7 +3,7 @@ from datetime import date
 import pandas as pd
 import pytest
 
-from krx_screener.asof import REFERENCE_CODE, AsOfError, resolve_as_of
+from krx_screener.asof import REFERENCE_CODE, AsOfError, AsOfUnavailableError, resolve_as_of
 from krx_screener.prices import PriceFetchError
 
 # 2026-11-02(월) ~ 11-06(금) 거래일
@@ -57,5 +57,11 @@ def test_fetch_failure_becomes_asof_error():
     def broken(code, start, end):
         raise PriceFetchError("연결 실패")
 
-    with pytest.raises(AsOfError, match="연결 실패"):
+    with pytest.raises(AsOfUnavailableError, match="연결 실패"):  # 입력 잘못이 아니라 외부 장애
         resolve_as_of(date(2026, 11, 9), None, broken)
+
+
+def test_wrong_input_is_not_an_unavailable_error():
+    with pytest.raises(AsOfError) as info:
+        resolve_as_of(date(2026, 11, 9), date(2026, 11, 7), _fetcher())  # 토요일
+    assert not isinstance(info.value, AsOfUnavailableError)

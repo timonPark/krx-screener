@@ -9,6 +9,7 @@
 """
 
 import os
+from datetime import date
 
 import pytest
 from fakes import make_externals
@@ -56,5 +57,8 @@ def externals(tmp_path):
 def client(pg_conn, externals):
     """웹 API 테스트 클라이언트: 진짜 테스트 DB + 가짜 외부 경계. 이 경계(HTTP)에서 동작을 검증한다."""
     url = os.environ[TEST_URL_ENV]
-    app = create_app(Dependencies(connect=lambda: db.connect(url), externals=externals))
+    # 오늘은 2026-11-09(월)로 고정한다: 가짜 시세의 마지막 거래일이 11-05(목)이다
+    app = create_app(
+        Dependencies(connect=lambda: db.connect(url), externals=externals, today=lambda: date(2026, 11, 9))
+    )
     return TestClient(app)
