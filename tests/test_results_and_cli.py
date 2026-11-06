@@ -54,7 +54,8 @@ def test_write_results_files_and_contents(tmp_path):
         "candidates": 1,
     }
     assert "근사" in info["approximations"]["trading_value"]
-    assert info["config"]["filters"]["rsi_max"] == 70
+    assert info["config"]["filters"]["min_avg_trading_value_krw"] == 1_000_000_000
+    assert "rsi_max" not in info["config"]["filters"]  # RSI 조건은 두지 않는다
     assert info["static_excluded_by_kind"]["preferred"] == 1
 
 

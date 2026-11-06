@@ -19,6 +19,7 @@ from fakes import (
     FakeSector,
     FakeTrend,
     make_externals,
+    repo_config,
     trend_rows,
     write_state_log,
 )
@@ -60,14 +61,14 @@ def test_health_when_the_database_is_down_is_a_korean_503(tmp_path):
     def broken():
         raise DatabaseError("PostgreSQL 에 연결하지 못했습니다 (127.0.0.1:1/krx).")
 
-    app = create_app(Dependencies(connect=broken, externals=make_externals(tmp_path)))
+    app = create_app(Dependencies(connect=broken, externals=make_externals(tmp_path), config=repo_config()))
     response = TestClient(app).get("/api/health")
     assert response.status_code == 503
     assert response.json() == {"detail": "PostgreSQL 에 연결하지 못했습니다 (127.0.0.1:1/krx)."}
 
 
 def test_unknown_address_is_a_404(tmp_path):
-    app = create_app(Dependencies(connect=lambda: None, externals=make_externals(tmp_path)))
+    app = create_app(Dependencies(connect=lambda: None, externals=make_externals(tmp_path), config=repo_config()))
     assert TestClient(app).get("/api/nope").status_code == 404
 
 

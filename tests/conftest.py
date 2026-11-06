@@ -12,7 +12,7 @@ import os
 from datetime import date
 
 import pytest
-from fakes import make_externals
+from fakes import make_externals, repo_config
 from fastapi.testclient import TestClient
 
 from krx_screener import db
@@ -59,6 +59,12 @@ def client(pg_conn, externals):
     url = os.environ[TEST_URL_ENV]
     # 오늘은 2026-11-09(월)로 고정한다: 가짜 시세의 마지막 거래일이 11-05(목)이다
     app = create_app(
-        Dependencies(connect=lambda: db.connect(url), externals=externals, today=lambda: date(2026, 11, 9))
+        Dependencies(
+            connect=lambda: db.connect(url),
+            externals=externals,
+            config=repo_config(),
+            today=lambda: date(2026, 11, 9),
+            retry_wait=0,
+        )
     )
     return TestClient(app)

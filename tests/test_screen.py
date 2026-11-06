@@ -1,3 +1,4 @@
+from dataclasses import replace
 from datetime import date
 from pathlib import Path
 
@@ -13,7 +14,9 @@ from krx_screener.screen import (
     UNDETERMINED,
     ZERO_VOLUME,
     apply_static_exclusions,
+    condition_names,
     evaluate,
+    lookback_days,
     run_screen,
 )
 
@@ -57,6 +60,25 @@ def test_overheated_stock_fails_rsi():
     ev = _ev([1000.0 + 10 * i for i in range(80)])  # 매일 상승 → RSI 100
     assert ev.passes["rsi"] is False
     assert ev.metrics["rsi"] == 100.0
+
+
+def test_without_an_rsi_condition_an_overheated_stock_still_passes_and_its_rsi_is_kept():
+    no_rsi = replace(FILTERS, rsi_max=None)
+    overheated = make_history([1000.0 + 10 * i for i in range(80)], 3_000_000, AS_OF)  # 매일 상승 → RSI 100
+    ev = evaluate(overheated, no_rsi, AS_OF, True)
+    assert ev.status == EVALUATED
+    assert "rsi" not in ev.passes  # 조건이 없으니 판정하지 않는다
+    assert all(ev.passes.values())
+    assert ev.metrics["rsi"] == 100.0  # 값은 계산해서 남긴다
+
+
+def test_condition_names_follow_the_rsi_setting():
+    assert condition_names(FILTERS) == ["avg_trading_value", "above_ma20", "above_ma60", "rsi"]
+    assert condition_names(replace(FILTERS, rsi_max=None)) == ["avg_trading_value", "above_ma20", "above_ma60"]
+
+
+def test_lookback_covers_the_longest_indicator_window():
+    assert lookback_days(FILTERS) == int(60 * 1.7) + 20  # 가장 긴 이동평균(60일)이 기준
 
 
 def test_zero_volume_on_as_of_is_excluded_or_evaluated_by_setting():
@@ -154,8 +176,9 @@ def test_run_screen_end_to_end():
     assert bool(flags.loc["000010", "is_caution"]) is False
     assert flags.loc["000070", "market"] == "KOSDAQ"
 
-    assert result.drop_first == {"avg_trading_value": 1, "above_ma20": 1, "above_ma60": 0, "rsi": 0}
-    assert result.fail_each == {"avg_trading_value": 1, "above_ma20": 1, "above_ma60": 1, "rsi": 0}
+    # 저장소 설정에는 RSI 조건이 없으므로 탈락 사유 집계에도 rsi 가 없다
+    assert result.drop_first == {"avg_trading_value": 1, "above_ma20": 1, "above_ma60": 0}
+    assert result.fail_each == {"avg_trading_value": 1, "above_ma20": 1, "above_ma60": 1}
     # 판정 대상 = 후보 + 탈락
     assert result.evaluated == len(result.candidates) + sum(result.drop_first.values())
 

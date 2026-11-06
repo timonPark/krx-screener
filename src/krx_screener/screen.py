@@ -44,7 +44,18 @@ class Evaluation:
 
 def condition_names(filters: Filters) -> list[str]:
     """탈락 사유를 세는 순서. 첫 번째로 만족하지 못한 조건이 그 종목의 탈락 사유가 된다."""
-    return ["avg_trading_value", *[f"above_ma{n}" for n in filters.price_above_ma], "rsi"]
+    names = ["avg_trading_value", *[f"above_ma{n}" for n in filters.price_above_ma]]
+    return [*names, "rsi"] if filters.rsi_max is not None else names
+
+
+# 시세 조회 구간: 필요한 거래일 수의 약 1.7배 + 여유 (주말·휴장 반영)
+_LOOKBACK_FACTOR = 1.7
+_LOOKBACK_MARGIN_DAYS = 20
+
+
+def lookback_days(filters: Filters) -> int:
+    """지표를 계산하는 데 필요한 만큼 시세를 거슬러 올라가 받을 달력 일수."""
+    return int(filters.required_rows * _LOOKBACK_FACTOR) + _LOOKBACK_MARGIN_DAYS
 
 
 def evaluate(
@@ -84,7 +95,8 @@ def evaluate(
         metrics[f"sma{n}"] = value
         passes[f"above_ma{n}"] = metrics["close"] > value
     metrics["rsi"] = rsi
-    passes["rsi"] = rsi < filters.rsi_max
+    if filters.rsi_max is not None:  # RSI 값은 늘 저장하고, 조건이 있을 때만 판정한다
+        passes["rsi"] = rsi < filters.rsi_max
     return Evaluation(EVALUATED, metrics=metrics, passes=passes)
 
 

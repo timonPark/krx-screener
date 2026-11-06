@@ -9,7 +9,7 @@ from dataclasses import replace
 from datetime import date, datetime
 
 import pytest
-from fakes import FakePrices, make_externals
+from fakes import FakePrices, make_externals, repo_config
 from fastapi.testclient import TestClient
 
 from krx_screener.api import Dependencies, create_app
@@ -28,7 +28,7 @@ def test_creating_a_session_returns_it_and_stores_it(client, pg_conn):
     assert response.status_code == 201
     body = response.json()
     assert set(body) == {"id", "as_of", "created_at", "total"}
-    assert (body["as_of"], body["total"]) == ("2026-11-05", 0)
+    assert (body["as_of"], body["total"]) == ("2026-11-05", 3)  # 기본 세계의 세 종목이 모두 목록에 들어간다
 
     row = pg_conn.execute("SELECT id, as_of FROM sessions").fetchone()
     assert (str(row[0]), row[1]) == (body["id"], date(2026, 11, 5))
@@ -110,7 +110,10 @@ def test_a_day_without_prices_is_rejected_with_the_nearest_trading_day(client, p
 
 def _app(tmp_path, connect, **overrides):
     externals = replace(make_externals(tmp_path), **overrides)
-    return TestClient(create_app(Dependencies(connect=connect, externals=externals, today=lambda: date(2026, 11, 9))))
+    deps = Dependencies(
+        connect=connect, externals=externals, config=repo_config(), today=lambda: date(2026, 11, 9), retry_wait=0
+    )
+    return TestClient(create_app(deps))
 
 
 def test_when_trading_days_cannot_be_checked_it_is_a_503_not_a_422(tmp_path):

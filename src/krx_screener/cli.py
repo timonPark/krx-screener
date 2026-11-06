@@ -30,7 +30,7 @@ from krx_screener.config import ConfigError, load_config
 from krx_screener.flow import REASON_LABELS, STATUS_LABELS, apply_flow, naver_trend
 from krx_screener.prices import PriceStore, fdr_fetcher
 from krx_screener.results import load_done_analysis, write_analysis, write_results
-from krx_screener.screen import condition_names, run_screen
+from krx_screener.screen import condition_names, lookback_days, run_screen
 from krx_screener.store import HISTORY_RANK, PENDING, QueueEntry, QueueRow, QueueStore
 
 app = typer.Typer(help="코스피·코스닥 전종목에서 분석 후보를 규칙으로 고르는 도구", no_args_is_help=True)
@@ -54,9 +54,6 @@ _CONDITION_LABELS = {
     "rsi": "RSI 과열",
 }
 
-# 시세 조회 구간: 필요한 거래일 수의 약 1.7배 + 여유 (주말·휴장 반영).
-_LOOKBACK_FACTOR = 1.7
-_LOOKBACK_MARGIN_DAYS = 20
 
 
 @app.callback()
@@ -150,7 +147,7 @@ def run(
     if limit:
         classified = classified.head(limit).reset_index(drop=True)
 
-    lookback = int(config.filters.required_rows * _LOOKBACK_FACTOR) + _LOOKBACK_MARGIN_DAYS
+    lookback = lookback_days(config.filters)
     store = PriceStore(fdr_fetcher, base, lookback, cache, today=today, refresh=refresh)
 
     console.print(f"기준일 {base} · 대상 목록 {len(classified):,}개")

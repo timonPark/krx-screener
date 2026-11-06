@@ -12,6 +12,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import date, datetime
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import psycopg
@@ -20,9 +21,11 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from krx_screener.asof import AsOfError, AsOfUnavailableError
+from krx_screener.config import Config
 from krx_screener.db import DatabaseError
 from krx_screener.externals import Externals
 from krx_screener.routes_sessions import router as sessions_router
+from krx_screener.universe import UniverseFetchError
 
 
 def today_kst() -> date:
@@ -33,7 +36,11 @@ def today_kst() -> date:
 class Dependencies:
     connect: Callable[[], psycopg.Connection]  # 요청마다 새 연결을 돌려준다
     externals: Externals
+    config: Config  # 목록 조건(제외·필터)과 분석 설정
     today: Callable[[], date] = field(default=today_kst)  # 테스트가 오늘 날짜를 고정할 수 있게 주입한다
+    cache_dir: Path | None = None  # 시세 캐시 폴더. None 이면 캐시하지 않는다
+    retry_wait: float = 0.5  # 외부 시세 조회를 재시도하기 전에 기다리는 초
+    workers: int = 8  # 종목 시세를 동시에 조회하는 수
 
 
 def create_app(deps: Dependencies) -> FastAPI:
@@ -42,6 +49,11 @@ def create_app(deps: Dependencies) -> FastAPI:
 
     @app.exception_handler(DatabaseError)
     def database_error(_: Request, exc: DatabaseError) -> JSONResponse:
+        return JSONResponse(status_code=503, content={"detail": str(exc)})
+
+    @app.exception_handler(UniverseFetchError)
+    def universe_unavailable(_: Request, exc: UniverseFetchError) -> JSONResponse:
+        # 전종목 목록을 받지 못함 = 외부 장애
         return JSONResponse(status_code=503, content={"detail": str(exc)})
 
     @app.exception_handler(AsOfUnavailableError)
