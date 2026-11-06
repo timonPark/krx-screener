@@ -1,5 +1,6 @@
 import { api, ApiError } from './api.js';
 import { config } from './config.js';
+import { createNotice } from './notice.js';
 import { reportHref } from './report.js';
 
 const $ = (id) => document.getElementById(id);
@@ -40,11 +41,11 @@ function prevBusinessDay() {
 }
 
 // ---------- 알림 ----------
-function showError(err) {
-  const el = $('error-notice');
-  if (!err) { el.hidden = true; el.textContent = ''; return; }
-  el.textContent = err instanceof ApiError ? err.message : String(err);
-  el.hidden = false;
+const notice = createNotice($('error-notice'));
+// from: 'action' = 누른 동작이 실패 (이어지는 조회가 성공해도 둔다), 'refresh' = 화면을 불러오다 실패 (다음 조회가 성공하면 사라진다)
+function showError(err, from = 'refresh') {
+  if (!err) { notice.clear(); return; }
+  notice.show(err instanceof ApiError ? err.message : String(err), from);
 }
 
 // ---------- 데이터 ----------
@@ -63,7 +64,7 @@ async function refresh() {
   if (!state.sessionId) { state.data = null; render(); return; }
   try {
     state.data = await api.getSession(state.sessionId);
-    showError(null);
+    notice.clearIfFromRefresh();   // 동작이 실패해서 띄운 오류는 이 조회가 성공해도 지우지 않는다
   } catch (err) {
     showError(err);
   }
@@ -241,11 +242,11 @@ function renderOrganize(c, d) {
 // ---------- 동작 ----------
 async function withBusy(fn) {
   state.busy = true; render();
-  try { await fn(); showError(null); } catch (err) { showError(err); } finally { state.busy = false; }
+  try { await fn(); showError(null); } catch (err) { showError(err, 'action'); } finally { state.busy = false; }
   await refresh();
 }
 
-$('session').addEventListener('change', (e) => { state.sessionId = e.target.value; refresh(); });
+$('session').addEventListener('change', (e) => { state.sessionId = e.target.value; showError(null); refresh(); });
 $('sort').addEventListener('change', (e) => { state.sort = e.target.value; render(); });
 $('chips').addEventListener('click', (e) => {
   const b = e.target.closest('[data-filter]');
