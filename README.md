@@ -1,55 +1,96 @@
 # krx-screener
 
-코스피·코스닥 전종목에서 **모델 없이 규칙만으로** 분석해 볼 만한 후보를 고르는 CLI.
-종목 하나를 깊게 분석하는 [TradingAgents-KR](../TradingAgents-KR) 에 넘길 후보 목록을 만드는 것이 목적이다.
+코스피·코스닥 전종목에서 **모델 없이 규칙만으로** 분석해 볼 만한 후보를 고르고, 그 후보를 [TradingAgents-KR](../TradingAgents-KR) 로 나눠서 분석해
+**에이전트별 등급과 평가점수로 순위**를 매기는 도구다. 명령줄(CLI)과 웹 화면이 같은 저장소(PostgreSQL)를 쓴다.
 
-> 상태: 1단계·1.5단계 완료. 3단계(`analyze`)는 구현됐고 후보 일부로 시범 실행 중이다.
+> 상태 (2026-11-07): 후보 고르기(1단계·1.5단계)와 세션 기반 웹 API·화면(목록 뽑기 → 나눠서 처리 → 조회 → 정리)이 구현되어 있다.
+> 실제 TradingAgents-KR 로 분석을 끝까지 돌려 본 것은 시범으로 돌린 3개(명령줄)뿐이다. 웹 처리 경로는 가짜 분석 서버로 확인했다 (분석은 종목당 약 5분이 걸리고 Max 플랜 쿼터를 쓴다).
 
-## 단계
+## 기능
 
-| 단계 | 내용 | 상태 |
+| 구분 | 내용 | 상태 |
 |---|---|---|
 | 유니버스 | 전종목에서 우선주·스팩·관리종목·거래정지 의심·신규상장·리츠 제외 | 완료 |
 | 1단계 | 시세 기반 규칙 필터 (거래대금, 20/60일선). RSI 는 값만 저장하고 조건으로 쓰지 않음 | 완료 |
 | 1.5단계 | 후보에만 수급 조회(네이버 증권), 표시만 하고 거르지 않음. 실패 시 "수급 미확인" | 완료 |
 | 2단계 | 가벼운 모델로 훑기 | 범위 밖 (후보가 너무 많을 때만) |
-| 3단계 | TradingAgents-KR API 로 전체 분석, 최종 등급이 매수·비중 확대인 종목 모으기 | 구현됨 (시범 실행 중) |
+| 3단계 | TradingAgents-KR API 로 전체 분석. 최종 등급과 에이전트별 등급, 평가점수를 저장 | 구현됨 (명령줄·웹) |
+| 세션 (웹) | 목록 뽑기 → 나눠서 처리 → 조회 → 정리(평가점수 순위) | 구현됨 |
 
-## 사용
+용어는 [GLOSSARY.md](GLOSSARY.md) 를 본다. **후보는 등급이 아니다.**
+
+## 준비
 
 ```bash
 uv venv --python 3.13 && uv pip install -e ".[dev]"
-# run·analyze·list 는 분석 대기열(PostgreSQL)을 쓴다: 아래 "웹 화면" 의 DB 준비(docker compose up -d, 환경변수, db init)를 먼저 한다
+docker compose up -d                                  # 개발용 PostgreSQL (127.0.0.1:5433)
+export KRX_SCREENER_DATABASE_URL=postgresql://krx:krx@127.0.0.1:5433/krx_screener
+.venv/bin/python -m krx_screener.db init              # 스키마 만들기·갱신 (여러 번 해도 안전)
+```
+
+- `run`·`analyze`·`list`·`serve` 는 PostgreSQL 이 필요하다 (`universe` 는 필요 없다). 코드를 새로 받은 뒤에는 `db init` 을 한 번 더 실행한다 (스키마가 오래됐으면 명령과 서버가 알려준다).
+- 분석(`analyze`, 웹의 "처리 시작")은 TradingAgents-KR 로컬 서버(`config.yaml` 의 `analysis.base_url`)가 **같은 컴퓨터**에 떠 있어야 한다.
+  에이전트별 등급은 그 서버의 로그 폴더(`TRADINGAGENTS_RESULTS_DIR`, 기본 `~/.tradingagents/logs`)에서 읽는다.
+- 접속 정보와 환경변수 예시는 `.env.example` 에 있다.
+
+## 웹 화면
+
+```bash
+.venv/bin/krx-screener serve                          # http://127.0.0.1:8100/ 에서 화면과 API 를 함께 연다
+# 백엔드 없이 화면만 보기 (예시 데이터): http://127.0.0.1:8100/?mock=1
+```
+
+1. **새 목록 뽑기**: 기준일을 정하면 그날의 후보 목록으로 세션을 만든다. 전종목(약 2,400개)의 시세를 받아 필터를 계산한 뒤 통과한 종목에만 수급·업종을 조회한다.
+   **시세 캐시(`cache/`)가 비어 있는 첫 실행은 약 20분**이 걸린다 (2026-11-07 측정, 후보 95개). 같은 기준일로 다시 뽑으면 캐시를 읽어 **약 5초**다. 요청이 끝날 때까지 화면은 "뽑는 중…" 이다.
+2. **나눠서 처리**: 오프셋(건너뛸 개수)과 개수를 정해 목록의 한 구간을 TradingAgents-KR 로 한 종목씩 분석한다. 처리는 뒤에서 돌고 표가 주기적으로 갱신된다. 같은 세션은 동시에 처리하지 못한다.
+3. **조회**: 처리 여부·등급·평가점수·순위·보고서 번호를 표로 본다.
+4. **정리**: 모든 종목이 처리된 뒤에만 평가점수 높은 순으로 순위를 매긴다 (실패한 종목은 비교에서 빠진다).
+
+`serve` 는 화면(`frontend/`)과 웹 API(`/api/...`)를 **한 주소**에서 연다. 로그인이 없어서 기본은 이 컴퓨터(`127.0.0.1`)에서만 열리고,
+다른 주소로 열려면 `--allow-remote` 가 필요하다 (접속한 누구나 분석 = 쿼터 사용을 시작할 수 있다). DB 가 아직 없어도 서버는 뜨고 `/api/health` 가 한국어로 알려준다.
+화면 명세는 [docs/frontend-spec.md](docs/frontend-spec.md), 화면 파일 설명은 [frontend/README.md](frontend/README.md) 에 있다.
+
+## 명령줄
+
+```bash
 .venv/bin/krx-screener universe          # 전종목 목록의 종류별 개수
-.venv/bin/krx-screener run               # 1단계 필터 실행 (기본 기준일: 직전 영업일, 약 1~2분)
+.venv/bin/krx-screener run               # 1단계 필터 실행 (기본 기준일: 직전 영업일). 시세 캐시가 없으면 오래 걸린다 (웹의 목록 뽑기는 약 20분을 쟀다)
 .venv/bin/krx-screener run --date 2026-11-05
 .venv/bin/krx-screener analyze --offset 0 --count 20   # 목록 1~20번만 TradingAgents-KR 로 분석 (쿼터 사용)
 .venv/bin/krx-screener analyze --offset 20 --count 20  # 이어서 21~40번 (--offset 은 건너뛸 개수)
+.venv/bin/krx-screener list              # 분석 대기열의 전체 목록과 처리 여부
 ```
-
-### 웹 화면 (세션 기반 스크리닝)
-
-```bash
-docker compose up -d                                  # 개발용 PostgreSQL (127.0.0.1:5433)
-export KRX_SCREENER_DATABASE_URL=postgresql://krx:krx@127.0.0.1:5433/krx_screener
-.venv/bin/python -m krx_screener.db init              # 스키마 만들기 (여러 번 해도 안전)
-.venv/bin/krx-screener serve                          # http://127.0.0.1:8100/ 에서 화면과 API 를 함께 연다
-# 백엔드 없이 화면만 보기: http://127.0.0.1:8100/?mock=1
-```
-
-`serve` 는 화면(`frontend/`)과 웹 API(`/api/...`)를 **한 주소**에서 연다. 로그인이 없어서 기본은 이 컴퓨터(`127.0.0.1`)에서만 열리고,
-다른 주소로 열려면 `--allow-remote` 가 필요하다 (접속한 누구나 분석 = 쿼터 사용을 시작할 수 있다). 분석은 TradingAgents-KR 서버
-(`config.yaml` 의 `analysis.base_url`)가 **같은 컴퓨터**에 떠 있어야 하고, 에이전트별 등급은 그 서버의 로그 폴더
-(`TRADINGAGENTS_RESULTS_DIR`, 기본 `~/.tradingagents/logs`)에서 읽는다. DB 가 아직 없어도 서버는 뜨고 `/api/health` 가 한국어로 알려준다.
 
 결과는 `results/<기준일>/` 에 저장된다.
 - `candidates.csv`: 후보 (종목코드, 종목명, 종가, 평균 거래대금(근사), 20/60일선, RSI, 투자주의환기·외국기업 표시,
   최근 5거래일 외국인·기관 순매수 합계(주), 수급 상태 `양호`/`부분`/`약함`/`미확인`)
 - `run.json`: 그날 쓴 설정, 단계별 종목 수, 탈락 사유별 개수, 판정 불가 종목과 사유
+- `analysis.csv`: `analyze` 결과 (DB 에서 내보낸 사본)
 
-`analyze` 는 TradingAgents-KR 로컬 서버(`config.yaml` 의 `analysis.base_url`)가 떠 있어야 하고, 종목마다 몇 분이 걸리며 Max 플랜 쿼터를 쓴다. 그래서 `--count` 가 필수이고 실행 전에 확인을 묻는다 (`--yes` 로 생략). 후보를 거래대금 큰 순서로 한 개씩 보내고, 결과는 `results/<기준일>/analysis.csv` 에 종목마다 저장한다. 후보 목록과 상태는 분석 대기열(PostgreSQL, 환경변수 `KRX_SCREENER_DATABASE_URL`)에 적고, 멈췄다가 다시 실행하면 끝나지 않은 종목부터 이어서 한다. 대기열은 기준일마다 웹 화면의 세션 하나로도 보이고(점수·보고서 번호·순위도 웹과 같이 저장된다), 웹 화면이나 다른 `analyze` 가 같은 목록을 처리 중이면 시작하지 않는다. `krx-screener list` 는 대기열의 전체 목록과 처리 여부를 보여준다 (`--state pending|running|done|failed|skipped`). 후보에서 빠진 끝난 분석은 지우지 않고 보관한다. 이미 끝난 종목은 다시 보내지 않는다 (`--redo` 로 다시 분석하며, 실패해도 기존 등급은 지우지 않는다). `--dry-run` 은 서버에 연결하지 않고 보낼 목록과 예상 시간만 보여준다. 영숫자 종목코드(예: `0126Z0`)는 서버가 거절해서 보내지 않고 "건너뜀" 으로 기록한다.
+시세는 `cache/` 에 기준일별로 저장되어 같은 기준일로 다시 돌리면 시세는 네트워크를 쓰지 않는다 (`--refresh` 로 다시 받음). 웹의 "새 목록 뽑기"도 같은 캐시를 쓴다.
 
-시세는 `cache/` 에 기준일별로 저장되어 같은 기준일로 다시 돌리면 네트워크를 쓰지 않는다 (`--refresh` 로 다시 받음).
+### analyze
+
+- 종목마다 몇 분이 걸리고 Max 플랜 쿼터를 쓴다. 그래서 `--count` 가 필수이고 실행 전에 확인을 묻는다 (`--yes` 로 생략). 후보를 거래대금 큰 순서로 **한 개씩** 보낸다.
+- 후보 목록과 상태는 **분석 대기열**(PostgreSQL)에 적는다. 멈췄다가 다시 실행하면 끝나지 않은 종목부터 이어서 한다. 이미 끝난 종목은 다시 보내지 않는다
+  (`--redo` 로 다시 분석하며, 실패해도 기존 등급은 지우지 않는다). 후보에서 빠진 끝난 분석은 지우지 않고 보관한다.
+- 대기열은 기준일마다 웹 화면의 세션 하나로도 보인다. 에이전트별 등급·평가점수·보고서 번호도 웹과 같이 저장된다.
+  웹 화면이나 다른 `analyze` 가 같은 목록을 처리 중이면 시작하지 않는다.
+- `--dry-run` 은 서버에 연결하지 않고 보낼 목록과 예상 시간만 보여준다.
+- 영숫자 종목코드(예: `0126Z0`)는 서버가 거절해서 보내지 않고 "건너뜀" 으로 기록한다.
+- `list --state pending|running|done|failed|skipped` 로 한 상태만 볼 수 있다.
+
+## 문서
+
+| 문서 | 내용 |
+|---|---|
+| [docs/backend-design.md](docs/backend-design.md) | 백엔드 설계 (세션, 처리, 평가점수, 조회, 정리). 14장에 구현 상태와 설계와의 차이 |
+| [docs/frontend-spec.md](docs/frontend-spec.md) | 화면 명세 (실제 `frontend/` 동작 기준) |
+| [docs/api-testing.md](docs/api-testing.md) | API 테스트 방법 (진짜 DB + 외부 경계의 가짜) |
+| [docs/adr/0001-postgres-analysis-queue.md](docs/adr/0001-postgres-analysis-queue.md) | 저장소를 PostgreSQL 로 정한 결정 |
+| [GLOSSARY.md](GLOSSARY.md) | 용어집 |
+| [CLAUDE.md](CLAUDE.md) | 작업 방식과 설계 제약 |
+| `work_history/` | 작업마다 남긴 기록 (변경·결정·검증·다음 작업) |
 
 ## 읽을 때 주의
 
@@ -58,7 +99,6 @@ export KRX_SCREENER_DATABASE_URL=postgresql://krx:krx@127.0.0.1:5433/krx_screene
 - 종목 종류(소속부·상장일)는 조회 시점 기준이고, 신규상장 60거래일은 평일 수로 센 근사값이다.
 - 필터 임계값(`config.yaml`)은 백테스트로 정한 값이 아니다. "후보 수가 감당 가능한가"만 보고 정한 시작값이다.
 - 3단계의 등급은 모델 분석의 결론이며 투자 성과를 보증하지 않는다. 후보 목록으로 읽는다.
+- **평가점수와 순위는 같은 세션 안에서 후보를 견주는 용도**다. 에이전트가 낸 등급의 평균이라 좁은 구간에 몰리고(실제 로그 13개에서 −0.9 ~ +0.4), 읽은 에이전트 수가 적을수록 불안정하다. 투자 판단이 아니다.
 - 후보는 **등급이 아니다.** 분석해 볼 만한 종목이라는 뜻일 뿐, 매수 판단이 아니다.
 - 필터를 통과하지 못한 종목 중에 실제 분석에서는 좋은 등급이 나왔을 종목이 있을 수 있다.
-
-용어는 [GLOSSARY.md](GLOSSARY.md), 작업 방식은 [CLAUDE.md](CLAUDE.md) 를 본다.

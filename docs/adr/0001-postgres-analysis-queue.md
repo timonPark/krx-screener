@@ -1,5 +1,7 @@
 # 세션·분석 대기열·결과는 PostgreSQL에 저장한다
 
+관련: [백엔드 설계 9장](../backend-design.md), [README](../../README.md)
+
 처음에는 "DB 없이 파일(CSV)로 한다"고 정했고, 이어서 SQLite 파일 하나로 바꿨다. 그러나 백엔드가 **웹 주소(API)로 화면에 서비스되는 구조**로 확정되어, 화면이 읽는 동안 처리가 계속 쓰게 되었다. 그래서 사용자가 PostgreSQL로 정했다. SQLite 결정은 구현 전에 이 결정으로 대체되었다.
 
 ## Considered Options

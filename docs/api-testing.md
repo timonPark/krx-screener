@@ -1,5 +1,7 @@
 # API 테스트 방법
 
+짝 문서: [백엔드 설계](backend-design.md) (검증할 동작), [화면 명세](frontend-spec.md). 처음 쓰는 사람은 [README](../README.md) 의 준비 절차를 먼저 한다.
+
 백엔드의 동작은 **웹 API(HTTP) 경계 하나**에서 검증한다. 구현 세부(SQL, 내부 함수 호출 순서)가 아니라 바깥에서 보이는 동작만 본다: 상태 코드, 응답 값, 처리 상태의 변화, 잠금, 점수·순위.
 
 - **진짜**: PostgreSQL (테스트 전용 데이터베이스). DB 는 동작의 일부(잠금 포함)라서 가짜로 바꾸지 않는다.
@@ -23,6 +25,8 @@ pytest                                    # DB 가 필요한 테스트까지 돈
 |---|---|
 | `pg_conn` | 스키마가 막 만들어진 테스트 DB 연결 (자동 커밋). 테스트가 끝나면 비운다 |
 | `repo` | `pg_conn` 위의 `SessionRepository` (세션·종목·등급 저장소) |
+| `hold_lock` | 세션의 처리 잠금을 다른 연결로 쥐는 함수 (돌려받은 연결을 닫으면 잠금이 풀린다 — "처리 중이던 연결이 끊긴" 상황) |
+| `queue_db` | 명령줄(`run`·`analyze`·`list`) 테스트용: 환경변수가 테스트 DB 를 가리키고 분석 상태 로그 폴더가 임시 폴더다. 돌려주는 연결로 결과를 본다 |
 | `externals` | 외부 경계의 가짜들 — 기본 세계 |
 | `client` | 진짜 테스트 DB + `externals` 로 만든 웹 API 테스트 클라이언트 |
 
@@ -34,7 +38,7 @@ pytest                                    # DB 가 필요한 테스트까지 돈
 | `prices` 종목별 시세 | `FakePrices(히스토리들, failing=[...])` | 세 종목 모두 필터를 통과하는 시세. `failing` 이거나 모르는 종목은 `PriceFetchError` |
 | `trend` 수급 | `FakeTrend(행들, failing=[...])` | 세 종목 모두 외국인·기관 순매수(양호). `failing` 이면 오류, 모르는 종목은 **빈 목록**(실제 서버와 같다) |
 | `sector` 업종 | `FakeSector({코드: SectorInfo(...)})` | 세 종목의 업종. 모르는 종목은 `None` (읽지 못함) |
-| `analysis` 분석 서버 | `FakeAnalysisServer(decisions=..., errors=..., polls_before_done=N, health_error=...)` | 모두 바로 끝나고 등급은 `Hold`. 보낸 요청은 `.started` 에 기록된다 |
+| `analysis` 분석 서버 | `FakeAnalysisServer(decisions=..., errors=..., polls_before_done=N, health_error=..., report_ids=..., agent_ratings=..., state_log_root=...)` | 모두 바로 끝나고 등급은 `Hold`, 보고서 번호도 준다. 끝나면 실제 서버처럼 상태 로그를 쓴다(에이전트는 기본 `Hold`). 보낸 요청은 `.started` 에 기록된다 |
 | `state_log_root` 분석 상태 로그 폴더 | `write_state_log(root, 코드, 기준일, 등급들)` | 실제 로그 모양의 JSON 을 임시 폴더에 쓴다 |
 
 ### 한 경계만 바꾸기
@@ -71,8 +75,14 @@ write_state_log(
 def test_health_reports_the_schema_version_and_the_db_agrees(client, pg_conn):
     response = client.get("/api/health")
     assert response.status_code == 200
-    assert response.json() == {"status": "ok", "db": "ok", "schema_version": 1}
-    assert pg_conn.execute("SELECT max(version) FROM schema_migrations").fetchone()[0] == 1
+    assert response.json() == {"status": "ok", "db": "ok", "schema_version": 2}
+    assert pg_conn.execute("SELECT max(version) FROM schema_migrations").fetchone()[0] == 2
 ```
+
+## 명령줄과 화면
+
+- **명령줄**(`run`·`analyze`·`list`)은 `CliRunner` 로 구동하고 `queue_db` 로 결과를 본다. 분석 서버는 `cli.AnalysisClient` 를 가짜 클라이언트로 바꿔 끼운다 (`tests/test_analyze_command.py`, `tests/test_queue_commands.py`).
+- **화면 계약**(`tests/test_frontend_contract.py`)은 Node 22 이상이 있을 때만 돈다 (없으면 건너뜀). 예시 데이터(`mock.js`)의 키가 백엔드 응답 모델과 같은지, 보고서 링크·오류 알림 규칙이 맞는지 본다.
+- **화면 서빙**(`tests/test_frontend_serving.py`)은 진짜 `frontend/` 를 서빙해서 모든 파일이 열리고 JS 가 모듈 형식으로 나가는지 본다.
 
 이 틀 자체의 테스트(`tests/test_api_base.py`)는 가짜들이 실제 소비 코드(분석 호출, 수급 판정, 시세 저장소)에서 그대로 쓰이는지도 확인한다. 가짜를 새로 만들 때 참고한다.
