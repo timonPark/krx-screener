@@ -5,16 +5,23 @@ TradingAgents-KR 는 별도 프로세스(로컬 서버)이고 HTTP API 로만 �
 - ``GET  /api/health``        서버 확인
 - ``POST /api/runs``          분석 시작 → 201 + ``run_id`` (종목코드는 ``^\\d{6}$`` 만 허용)
 - ``GET  /api/runs/{run_id}`` 상태 스냅샷 (``pending``/``running``/``done``/``error``, ``decision``)
+- ``GET  /api/runs/{run_id}/events`` 진행 이벤트 (SSE). 보고서 번호는 여기의 ``report_saved`` 이벤트에만 있다
 
 주의:
 - 종목 하나의 분석이 몇 분 걸리고 Max 플랜 쿼터를 쓴다. 호출하는 쪽(CLI)이 개수를 제한하고 확인한다.
 - 서버에는 취소 API 가 없다. 시간 초과로 기다리기를 멈춰도 서버에서는 계속 돌 수 있다.
 - ``run_id`` 상태는 서버 메모리에만 있다. 서버가 재시작되면 404 가 된다.
+- 보고서 번호(``report_id``, 예: ``028050_20261106_172435``)는 상태 스냅샷에 없다. 서버는 보고서를 저장한 직후 ``report_saved``
+  이벤트를 내고 그 다음에 ``done`` 을 내므로, 분석이 끝난 뒤 이벤트를 다시 읽으면(서버가 처음부터 되풀이해 준다) 항상 있다.
+  보고서 목록(``GET /api/reports``)에서 종목코드로 찾는 방법은 쓰지 않는다: 같은 종목의 보고서가 여러 개일 수 있고 보고서 번호의
+  시각은 저장한 시각이라 어느 것이 이번 분석인지 가릴 수 없다.
 - 영숫자 종목코드(예: ``0126Z0``)는 서버가 거절하므로 보내지 않고 "건너뜀" 으로 기록한다.
 """
 
 from __future__ import annotations
 
+import json
+import logging
 import re
 import time
 from collections.abc import Callable
@@ -36,6 +43,9 @@ REVIEW = "REVIEW"  # 서버가 등급을 읽지 못한 경우 (사람이 확인)
 DONE, FAILED, TIMEOUT, SKIPPED = "done", "error", "timeout", "skipped"
 
 _SERVER_CODE_RE = re.compile(r"^\d{6}$")
+_REPORT_ID_RE = re.compile(r"^\d{6}_\d{8}_\d{6}$")  # 서버의 보고서 폴더 이름: 종목코드_저장일_저장시각
+
+logger = logging.getLogger(__name__)
 
 
 class AnalysisError(RuntimeError):
@@ -75,6 +85,7 @@ class AnalysisOutcome:
     run_id: str = ""
     elapsed_seconds: float = 0.0
     message: str = ""
+    report_id: str = ""  # 서버가 저장한 보고서 번호. 읽지 못했으면 빈 문자열 (분석 결과는 그대로 유효하다)
 
     @property
     def is_target(self) -> bool:
@@ -133,6 +144,37 @@ class AnalysisClient:
             raise AnalysisError(f"분석 상태 조회 실패 (HTTP {resp.status_code})")
         return _json(resp)
 
+    def report_id(self, run_id: str) -> str | None:
+        """끝난 분석의 보고서 번호. 서버가 보고서를 저장하지 않았거나 모양이 이상하면 None.
+
+        진행 이벤트(SSE)를 읽는다. 분석이 끝난 뒤에는 서버가 이벤트를 처음부터 되풀이하고 ``done`` 에서 끝내므로 오래 걸리지 않는다.
+        """
+        resp = self._call("GET", f"/api/runs/{run_id}/events", stream=True)
+        try:
+            if resp.status_code != 200:
+                raise AnalysisError(f"보고서 번호 조회 실패 (HTTP {resp.status_code})")
+            for raw in resp.iter_lines():
+                # text/event-stream 은 charset 이 없으면 requests 가 ISO-8859-1 로 읽어 한글이 깨진다. bytes 로 받아 UTF-8 로 직접 읽는다
+                line = raw.decode("utf-8", "replace") if isinstance(raw, bytes) else raw
+                if not line.startswith("data:"):
+                    continue
+                try:
+                    event = json.loads(line[len("data:"):])
+                except ValueError:
+                    continue  # 깨진 줄은 건너뛴다
+                if not isinstance(event, dict):
+                    continue
+                if event.get("type") == "report_saved":
+                    found = event.get("report_id")
+                    return found if isinstance(found, str) and _REPORT_ID_RE.fullmatch(found) else None
+                if event.get("type") in {"done", "error"}:
+                    return None  # 보고서를 저장하지 않고 끝났다
+            return None
+        except self._requests.RequestException as exc:
+            raise AnalysisError(f"보고서 번호를 읽지 못했습니다: {type(exc).__name__}") from None
+        finally:
+            resp.close()
+
 
 def _json(resp: Any) -> dict[str, Any]:
     try:
@@ -188,7 +230,7 @@ def run_one(
             message = "" if decision else f"등급을 읽지 못했습니다 (서버 값: {snap.get('decision')!r})"
             return AnalysisOutcome(
                 code, name, DONE, decision=decision or REVIEW, run_id=run_id,
-                elapsed_seconds=elapsed, message=message,
+                elapsed_seconds=elapsed, message=message, report_id=_read_report_id(client, run_id, code),
             )
         if status == "error":
             return AnalysisOutcome(
@@ -201,3 +243,12 @@ def run_one(
                 message=f"{int(timeout_seconds)}초 안에 끝나지 않아 기다리기를 멈췄습니다 (서버에서는 계속 실행 중일 수 있음).",
             )
         sleep(poll_interval)
+
+
+def _read_report_id(client: AnalysisClient, run_id: str, code: str) -> str:
+    """보고서 번호를 읽는다. 못 읽어도 분석 결과(등급)는 유효하므로 빈 문자열로 두고 실패로 만들지 않는다."""
+    try:
+        return client.report_id(run_id) or ""
+    except AnalysisError as exc:
+        logger.warning("보고서 번호를 읽지 못했습니다 (%s): %s", code, exc)
+        return ""

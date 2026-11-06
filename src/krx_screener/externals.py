@@ -50,6 +50,8 @@ class AnalysisServer(Protocol):
 
     def snapshot(self, run_id: str) -> dict[str, Any]: ...
 
+    def report_id(self, run_id: str) -> str | None: ...
+
 
 @dataclass(frozen=True)
 class Externals:

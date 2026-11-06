@@ -82,8 +82,12 @@ class FakeAnalysisServer:
         errors: Iterable[str] = (),
         polls_before_done: int = 0,
         health_error: str | None = None,
+        report_ids: Mapping[str, str | None] | None = None,
+        report_error: str | None = None,
     ) -> None:
         self.decisions = dict(decisions or {})
+        self.report_ids = dict(report_ids or {})  # 종목코드 → 보고서 번호. None 이면 보고서를 저장하지 않은 것
+        self.report_error = report_error  # 보고서 번호를 읽는 호출이 이 한국어 오류로 실패한다
         self.errors = set(errors)
         self.polls_before_done = polls_before_done
         self.health_error = health_error
@@ -97,6 +101,12 @@ class FakeAnalysisServer:
     def start(self, ticker: str, trade_date: str, effort: str) -> str:
         self.started.append((ticker, trade_date, effort))
         return f"run-{ticker}"
+
+    def report_id(self, run_id: str) -> str | None:
+        if self.report_error:
+            raise AnalysisError(self.report_error)
+        code = run_id.removeprefix("run-")
+        return self.report_ids.get(code, f"{code}_20261106_100000")  # 기본: 실제와 같은 모양의 번호
 
     def snapshot(self, run_id: str) -> dict[str, Any]:
         code = run_id.removeprefix("run-")
