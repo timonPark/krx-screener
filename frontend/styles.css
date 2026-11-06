@@ -1,0 +1,184 @@
+/* KRX Screener 화면 — 디자인 캔버스(KRX Screener 화면 디자인) 기준 */
+:root {
+  --bg: #F4F5F7;
+  --surface: #FFFFFF;
+  --surface-sub: #F8F9FB;
+  --border: #DDE1E7;
+  --border-soft: #ECEEF2;
+  --input-border: #C9CED6;
+  --text: #14171C;
+  --text-2: #3F4652;
+  --muted: #5B6370;
+  --faint: #8A919C;
+  --label: #4B5360;
+  --link: #2448B8;
+  --primary: #14171C;
+  --disabled-bg: #D5D9E0;
+
+  /* 처리 여부 */
+  --st-pending-bg: #EEF0F3; --st-pending-fg: #3F4652; --st-pending-dot: #9AA1AC;
+  --st-running-bg: #EEEBFC; --st-running-fg: #4A35B0; --st-running-dot: #6B4FD8;
+  --st-done-bg: #E6F3EC;    --st-done-fg: #18603E;    --st-done-dot: #1E7A4F;
+  --st-failed-bg: #FCEDE3;  --st-failed-fg: #8F3A0A;  --st-failed-dot: #C2580F;
+
+  /* 점수·등급: 국내 관례 (매수 쪽 빨강, 매도 쪽 파랑) */
+  --up: #C8323C; --up-text: #B02A33;
+  --down: #2A5DB0; --down-text: #244F9E;
+
+  --warn-bg: #FFF6E5; --warn-border: #F0D49A; --warn-fg: #6B4700; --warn-accent: #8A5A00;
+
+  --font: 'IBM Plex Sans KR', system-ui, -apple-system, 'Apple SD Gothic Neo', sans-serif;
+  --mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+  --radius: 10px;
+}
+
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); font-family: var(--font); }
+a { color: var(--link); }
+a:hover { color: #16307F; }
+.num { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+.muted { color: var(--muted); }
+.faint { color: var(--faint); }
+[hidden] { display: none !important; }
+
+.page { padding: 24px 16px 48px; }
+.wrap { max-width: 1360px; margin: 0 auto; display: flex; flex-direction: column; gap: 16px; }
+
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); }
+
+/* 상단 바 */
+.topbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; }
+.brand { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+.brand h1 { margin: 0; font-size: 20px; font-weight: 700; letter-spacing: -0.01em; }
+.brand span { font-size: 13px; color: var(--muted); }
+.poll { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); }
+.poll-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--st-pending-dot); }
+.poll-dot.live { background: var(--st-running-dot); animation: pulse 1.6s ease-in-out infinite; }
+.mock-tag { padding: 2px 8px; border-radius: 999px; background: var(--warn-bg); border: 1px solid var(--warn-border); color: var(--warn-fg); font-weight: 600; }
+@keyframes pulse { 50% { opacity: .35; } }
+@media (prefers-reduced-motion: reduce) { .poll-dot.live { animation: none; } }
+
+/* 폼 요소 */
+.field { display: flex; flex-direction: column; gap: 6px; }
+.field label, .lbl { font-size: 12px; font-weight: 600; color: var(--label); }
+.input, .select {
+  height: 44px; padding: 0 12px; font: inherit; font-size: 14px; color: var(--text);
+  border: 1px solid var(--input-border); border-radius: 8px; background: var(--surface);
+}
+.input:disabled { background: var(--surface-sub); color: var(--muted); }
+.select.sm { height: 40px; font-size: 13px; padding: 0 10px; }
+
+.btn {
+  height: 44px; padding: 0 20px; font: inherit; font-size: 14px; font-weight: 600;
+  border-radius: 8px; border: none; cursor: pointer; background: var(--primary); color: #fff; white-space: nowrap;
+}
+.btn.outline { background: var(--surface); color: var(--text); border: 1px solid var(--primary); }
+.btn:disabled { background: var(--disabled-bg); color: var(--muted); border-color: transparent; cursor: not-allowed; }
+.btn:focus-visible, .chip:focus-visible, .input:focus-visible, .select:focus-visible { outline: 2px solid var(--link); outline-offset: 2px; }
+
+/* 세션 구역 */
+.session { padding: 16px 20px; display: flex; flex-wrap: wrap; align-items: flex-end; gap: 16px 32px; }
+.session .field { min-width: 260px; }
+.meta { margin: 0; display: flex; flex-wrap: wrap; gap: 8px 28px; font-size: 13px; flex: 1 1 420px; }
+.meta > div { display: flex; flex-direction: column; gap: 4px; }
+.meta dt { color: var(--muted); font-size: 12px; }
+.meta dd { margin: 0; }
+.new-list { display: flex; align-items: flex-end; gap: 8px; flex-wrap: wrap; }
+
+/* 진행 요약 */
+.progress { padding: 16px 20px; display: flex; flex-direction: column; gap: 10px; }
+.progress-head { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px; font-size: 13px; }
+.progress-head b { color: var(--text); }
+.bar { height: 8px; border-radius: 4px; background: var(--border-soft); display: flex; overflow: hidden; }
+.bar > span { height: 8px; transition: width .3s; }
+.bar .done { background: var(--st-done-dot); }
+.bar .failed { background: var(--st-failed-dot); }
+.bar .running { background: var(--st-running-dot); }
+
+/* 알림 띠 */
+.notice { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 12px 16px; border-radius: var(--radius); font-size: 13px; }
+.notice.warn { background: var(--warn-bg); border: 1px solid var(--warn-border); color: var(--warn-fg); }
+.notice.error { background: var(--st-failed-bg); border: 1px solid #F2C3A3; color: var(--st-failed-fg); }
+
+/* 조회 표 */
+.table-card { overflow: hidden; }
+.toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 16px; border-bottom: 1px solid var(--border); }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip {
+  height: 36px; padding: 0 14px; font: inherit; font-size: 13px; font-weight: 600; border-radius: 999px; cursor: pointer;
+  border: 1px solid var(--input-border); background: var(--surface); color: var(--text-2);
+}
+.chip[aria-pressed="true"] { border-color: var(--primary); background: var(--primary); color: #fff; }
+.chip .num { opacity: .75; margin-left: 2px; }
+.sort { display: flex; align-items: center; gap: 8px; }
+
+.scroll { overflow-x: auto; }
+table { width: 100%; min-width: 1280px; border-collapse: collapse; }
+th { padding: 10px 12px; font-size: 12px; font-weight: 600; color: var(--label); text-align: left; white-space: nowrap; border-bottom: 1px solid var(--border); background: var(--surface-sub); }
+td { padding: 12px; font-size: 13px; border-bottom: 1px solid var(--border-soft); vertical-align: top; }
+.r { text-align: right; }
+.nw { white-space: nowrap; }
+tr.is-running { background: #F7F5FE; }
+.name { font-weight: 600; }
+.sub { font-size: 12px; color: var(--muted); margin-top: 2px; }
+.tiny { font-size: 11px; color: var(--muted); margin-top: 4px; }
+.flag { display: inline-block; margin-left: 6px; padding: 0 6px; border-radius: 4px; font-size: 11px; font-weight: 600; background: var(--warn-bg); color: var(--warn-accent); vertical-align: 1px; }
+.theme { max-width: 280px; }
+.theme .sector { font-size: 12px; font-weight: 600; color: var(--text-2); }
+.theme .desc { font-size: 12px; color: var(--muted); margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.table-foot { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px; padding: 12px 16px; font-size: 12px; color: var(--muted); }
+.empty { padding: 40px 16px; text-align: center; color: var(--muted); font-size: 13px; }
+
+/* 수급 */
+.flow { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 500; }
+.flow i { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+.flow-good i { background: var(--st-done-dot); }
+.flow-partial i { background: #B07A00; }
+.flow-weak i { border: 1.5px solid var(--faint); }
+.flow-unknown i { border: 1.5px dashed var(--faint); }
+
+/* 처리 여부 배지 */
+.status { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px 3px 8px; border-radius: 999px; font-size: 12px; font-weight: 600; }
+.status i { width: 6px; height: 6px; border-radius: 50%; }
+.st-pending { background: var(--st-pending-bg); color: var(--st-pending-fg); } .st-pending i { background: var(--st-pending-dot); }
+.st-running { background: var(--st-running-bg); color: var(--st-running-fg); } .st-running i { background: var(--st-running-dot); }
+.st-done { background: var(--st-done-bg); color: var(--st-done-fg); } .st-done i { background: var(--st-done-dot); }
+.st-failed { background: var(--st-failed-bg); color: var(--st-failed-fg); } .st-failed i { background: var(--st-failed-dot); }
+
+/* 등급 */
+.grade { display: inline-block; padding: 3px 10px; border-radius: 6px; font-size: 12px; font-weight: 600; }
+.g-buy { background: #FBE3E4; color: #A3212B; }
+.g-overweight { background: #FDF0F0; color: #A8343D; }
+.g-hold { background: #EEF0F3; color: #3F4652; }
+.g-underweight { background: #E9EFF9; color: #2A5596; }
+.g-sell { background: #DCE6F7; color: #1D4A8F; }
+
+/* 점수 */
+.score { display: flex; align-items: center; gap: 8px; }
+.score-val { font-size: 13px; font-weight: 600; min-width: 44px; text-align: right; color: var(--text-2); }
+.score-val.pos { color: var(--up-text); }
+.score-val.neg { color: var(--down-text); }
+.score-bar { position: relative; width: 60px; height: 6px; background: var(--border-soft); border-radius: 3px; }
+.score-bar::before { content: ""; position: absolute; left: 29px; top: -2px; width: 2px; height: 10px; background: #9AA1AC; }
+.score-bar span { position: absolute; top: 0; height: 6px; border-radius: 3px; }
+.score-bar .pos { left: 30px; background: var(--up); }
+.score-bar .neg { right: 30px; background: var(--down); }
+
+.rank { font-size: 13px; font-weight: 600; }
+.rank.stale { color: var(--warn-accent); }
+.stale-tag { font-size: 11px; color: var(--warn-accent); margin-top: 4px; }
+
+/* 처리·정리 */
+.actions { display: flex; flex-wrap: wrap; gap: 16px; }
+.panel { padding: 18px 20px; display: flex; flex-direction: column; gap: 14px; }
+.panel.process { flex: 2 1 560px; }
+.panel.organize { flex: 1 1 320px; }
+.panel-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.panel h2 { margin: 0; font-size: 15px; font-weight: 700; }
+.panel p { margin: 0; font-size: 12px; color: var(--muted); line-height: 1.6; }
+.panel p.body { font-size: 13px; color: var(--text-2); }
+.process-row { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 12px; }
+.process-row .input { width: 140px; }
+.estimate { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); padding-bottom: 4px; flex: 1 1 200px; }
+.estimate b { color: var(--text); }
+.organize-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; font-size: 12px; color: var(--muted); }

@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>KRX Screener</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+KR:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+<div class="page">
+<div class="wrap">
+
+  <header class="topbar">
+    <div class="brand">
+      <h1>KRX Screener</h1>
+      <span>코스피·코스닥 후보 → TradingAgents-KR 분석 → 순위</span>
+    </div>
+    <div class="poll">
+      <span id="mock-tag" class="mock-tag" hidden>예시 데이터 (mock)</span>
+      <span id="poll-dot" class="poll-dot" aria-hidden="true"></span>
+      <span id="poll-text">불러오는 중…</span>
+    </div>
+  </header>
+
+  <!-- 1. 세션 -->
+  <section class="card session" aria-label="세션">
+    <div class="field">
+      <label for="session">세션</label>
+      <select id="session" class="select"></select>
+    </div>
+    <dl class="meta">
+      <div><dt>기준일</dt><dd id="m-asof" class="num" style="font-weight:600">—</dd></div>
+      <div><dt>뽑은 시각</dt><dd id="m-created" class="num">—</dd></div>
+      <div><dt>종목 수</dt><dd id="m-total" class="num" style="font-weight:600">—</dd></div>
+      <div><dt>필터</dt><dd>20일 평균 거래대금 10억↑ · 종가 &gt; 20일선 · 종가 &gt; 60일선</dd></div>
+    </dl>
+    <form id="new-list" class="new-list">
+      <div class="field">
+        <label for="asof">새 목록 기준일</label>
+        <input id="asof" class="input" type="date" required>
+      </div>
+      <button id="new-list-btn" class="btn outline" type="submit">새 목록 뽑기</button>
+    </form>
+  </section>
+
+  <!-- 진행 요약 -->
+  <section class="card progress" aria-label="진행 요약">
+    <div class="progress-head">
+      <span style="font-weight:600">처리 진행 <span class="num" id="p-processed">0 / 0</span></span>
+      <span class="muted">완료 <b class="num" id="p-done">0</b> · 처리 중 <b class="num" id="p-running">0</b> · 실패 <b class="num" id="p-failed">0</b> · 대기 <b class="num" id="p-pending">0</b></span>
+    </div>
+    <div class="bar" aria-hidden="true">
+      <span class="done" id="b-done"></span><span class="failed" id="b-failed"></span><span class="running" id="b-running"></span>
+    </div>
+  </section>
+
+  <div id="stale-notice" class="notice warn" role="status" hidden>
+    <b>순위가 낡았습니다.</b>
+    <span>정리 이후 다시 분석된 종목이 있습니다. 최신 순위를 보려면 아래에서 정리를 다시 실행하세요.</span>
+  </div>
+  <div id="error-notice" class="notice error" role="alert" hidden></div>
+
+  <!-- 2. 조회 표 -->
+  <section class="card table-card" aria-label="조회">
+    <div class="toolbar">
+      <div id="chips" class="chips" role="group" aria-label="처리 여부로 거르기"></div>
+      <div class="sort">
+        <label class="lbl" for="sort">정렬</label>
+        <select id="sort" class="select sm">
+          <option value="seq">순번 (거래대금 큰 순)</option>
+          <option value="score">점수 높은 순</option>
+          <option value="rank">순위</option>
+        </select>
+      </div>
+    </div>
+    <div class="scroll">
+      <table>
+        <thead>
+          <tr>
+            <th class="r" scope="col">순번</th>
+            <th scope="col">종목</th>
+            <th scope="col">업종 · 기업 설명</th>
+            <th scope="col">수급</th>
+            <th class="r" scope="col">종가</th>
+            <th class="r" scope="col">평균 거래대금</th>
+            <th class="r" scope="col">RSI</th>
+            <th scope="col">처리</th>
+            <th scope="col">최종 등급</th>
+            <th scope="col">평가점수</th>
+            <th class="r" scope="col">순위</th>
+            <th scope="col">보고서</th>
+          </tr>
+        </thead>
+        <tbody id="rows"></tbody>
+      </table>
+      <div id="empty" class="empty" hidden>조건에 맞는 종목이 없습니다.</div>
+    </div>
+    <div class="table-foot">
+      <span id="row-count"></span>
+      <span>점수는 분석이 끝난 종목부터, 순위는 정리 실행 후 채워집니다</span>
+    </div>
+  </section>
+
+  <!-- 3. 처리 / 정리 -->
+  <section class="actions" aria-label="처리와 정리">
+    <form id="process" class="card panel process">
+      <div class="panel-head">
+        <h2>나눠서 처리</h2>
+        <span class="muted" style="font-size:12px">분석 설정 low 고정 · 한 종목씩 순서대로 · 끝난 종목은 건너뜀</span>
+      </div>
+      <div class="process-row">
+        <div class="field">
+          <label for="offset">오프셋 (건너뛸 개수)</label>
+          <input id="offset" class="input num" type="number" min="0" step="1" value="0" required>
+        </div>
+        <div class="field">
+          <label for="count">개수</label>
+          <input id="count" class="input num" type="number" min="1" step="1" value="10" required style="width:120px">
+        </div>
+        <div class="estimate">
+          <span>대상: 순번 <b class="num" id="range">—</b></span>
+          <span>예상 약 <b class="num" id="eta">—</b> (종목당 약 5분, 끝난 종목 제외)</span>
+        </div>
+        <button id="start-btn" class="btn" type="submit">처리 시작</button>
+      </div>
+      <p id="start-hint"></p>
+    </form>
+
+    <div class="card panel organize">
+      <div class="panel-head"><h2>정리 (순위 매기기)</h2></div>
+      <p class="body">모든 종목이 처리된 뒤에만 실행됩니다. 점수 높은 순, 같으면 순번이 앞선 종목이 위. 실패한 종목은 비교에서 빠집니다.</p>
+      <div class="organize-row">
+        <button id="organize-btn" class="btn" type="button">정리 실행</button>
+        <span id="organize-hint"></span>
+      </div>
+    </div>
+  </section>
+
+</div>
+</div>
+<script type="module" src="./app.js"></script>
+</body>
+</html>
