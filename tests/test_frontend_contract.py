@@ -153,3 +153,124 @@ def test_the_screen_code_no_longer_uses_the_run_id(name):
 def test_the_report_column_reads_the_report_id():
     app = (FRONTEND / "app.js").read_text(encoding="utf-8")
     assert "it.report_id" in app
+
+
+# --- 오류 알림 (#28): 동작이 실패해서 띄운 오류는 이어지는 조회가 성공해도 사라지지 않는다 ---
+
+NOTICE = """
+const { createNotice } = await import(dir + '/notice.js');
+const el = { hidden: true, textContent: '' };
+const notice = createNotice(el);
+const state = () => ({ hidden: el.hidden, text: el.textContent });
+"""
+
+
+@needs_node
+def test_an_action_error_survives_the_refresh_that_follows_it():
+    """처리·정리·새 목록이 실패하면 오류를 띄우고 곧바로 조회를 다시 부른다. 그 조회가 성공해도 오류가 사라지면 사용자가 읽을 수 없다
+    (실제 브라우저에서 약 20ms 만 보였다)."""
+    got = run_js(
+        NOTICE
+        + """
+notice.show('이미 처리 중입니다.', 'action');
+notice.clearIfFromRefresh();           // 이어서 부른 조회가 성공했다
+console.log(JSON.stringify(state()));
+"""
+    )
+    assert got == {"hidden": False, "text": "이미 처리 중입니다."}
+
+
+@needs_node
+def test_a_refresh_error_goes_away_when_a_later_refresh_succeeds():
+    got = run_js(
+        NOTICE
+        + """
+notice.show('PostgreSQL 에 연결하지 못했습니다.', 'refresh');
+notice.clearIfFromRefresh();           // 서버가 되살아나서 조회가 성공했다
+console.log(JSON.stringify(state()));
+"""
+    )
+    assert got == {"hidden": True, "text": ""}
+
+
+@needs_node
+def test_the_next_action_or_a_session_change_clears_an_action_error():
+    got = run_js(
+        NOTICE
+        + """
+notice.show('남은 3개가 끝나야 정리할 수 있습니다.', 'action');
+notice.clear();                        // 다음 동작이 성공했거나 다른 세션을 골랐다
+console.log(JSON.stringify(state()));
+"""
+    )
+    assert got == {"hidden": True, "text": ""}
+
+
+@needs_node
+def test_a_newer_error_replaces_the_older_one_and_takes_over_its_source():
+    got = run_js(
+        NOTICE
+        + """
+notice.show('이미 처리 중입니다.', 'action');
+notice.show('서버에 연결하지 못했습니다.', 'refresh');   // 이어서 부른 조회도 실패했다
+const first = state();
+notice.clearIfFromRefresh();                              // 이제 조회가 성공하면 지워진다
+console.log(JSON.stringify([first, state()]));
+"""
+    )
+    assert got == [
+        {"hidden": False, "text": "서버에 연결하지 못했습니다."},
+        {"hidden": True, "text": ""},
+    ]
+
+
+@needs_node
+def test_clearing_when_nothing_is_shown_is_harmless():
+    got = run_js(NOTICE + "notice.clear(); notice.clearIfFromRefresh(); console.log(JSON.stringify(state()));")
+    assert got == {"hidden": True, "text": ""}
+
+
+def test_the_screen_keeps_action_errors_through_the_refresh_that_follows():
+    app = (FRONTEND / "app.js").read_text(encoding="utf-8")
+    assert "createNotice" in app and "clearIfFromRefresh" in app
+    assert "showError(err, 'action')" in app  # 동작(withBusy)의 오류는 동작 출처로 띄운다
+
+
+# --- 예시 데이터의 값과 문구도 백엔드와 같다 (#28 에서 실제 화면과 견주며 찾은 차이) ---
+
+
+@needs_node
+def test_the_mock_organize_refusal_reads_like_the_backends():
+    got = run_js(
+        MOCK
+        + """
+try { await api.organize('latest'); console.log(JSON.stringify(null)); }
+catch (e) { console.log(JSON.stringify({ status: e.status, body: e.body })); }
+"""
+    )
+    # 예시 데이터는 처음에 대기 종목이 10개다 (백엔드: `남은 N개가 끝나야 정리할 수 있습니다.`)
+    assert got == {"status": 409, "body": {"detail": "남은 10개가 끝나야 정리할 수 있습니다.", "remaining": 10}}
+
+
+@needs_node
+def test_the_mock_organize_answer_has_the_same_keys_as_the_backends():
+    got = run_js(
+        MOCK
+        + """
+await api.process('latest', 4, 100);       // 실패한 4번은 두고 나머지를 모두 처리
+for (let i = 0; i < 400; i++) { if (!(await api.getSession('latest')).processing) break; await new Promise((r) => setTimeout(r, 20)); }
+console.log(JSON.stringify(await api.organize('latest')));
+"""
+    )
+    assert set(got) == {"ranked", "unscored"} and got["unscored"] == 0  # 백엔드: {"ranked": N, "unscored": M}
+
+
+@needs_node
+def test_the_mock_items_not_yet_analyzed_look_like_the_backends():
+    detail = run_js(MOCK + "console.log(JSON.stringify(await api.getSession('latest')));")
+    pending = [i for i in detail["items"] if i["state"] == "pending"]
+    assert pending
+    for item in pending:  # 백엔드: 처리 전에는 점수가 없고 에이전트 수도 0/0 이다
+        assert (item["score"], item["agents_rated"], item["agents_total"], item["rank"]) == (None, 0, 0, None)
+    for item in (i for i in detail["items"] if i["state"] == "done"):
+        assert item["agents_total"] == 10  # 끝난 종목은 에이전트 10개 기준

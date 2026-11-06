@@ -10,6 +10,7 @@
 | `app.js` | 화면 상태, 그리기, 버튼 동작, 처리 중 주기적 갱신 |
 | `api.js` | 백엔드 호출 (경로는 아래 API 계약) |
 | `report.js` | 보고서 링크 주소 만들기 |
+| `notice.js` | 오류 알림 (동작 오류와 조회 오류가 사라지는 때를 구분) |
 | `mock.js` | 백엔드 없이 보는 예시 API (`?mock=1`) |
 | `config.js` | API 주소, 갱신 간격, 보고서 링크 주소 |
 
@@ -47,7 +48,7 @@ cd frontend && python3 -m http.server 8080     # http://localhost:8080/?mock=1
 | 2 나눠서 처리 | `POST /api/sessions/{id}/process` `{"offset": 0, "count": 10}` | `202 {"started": true, "queued": 7}` · 처리 중이면 `409 {"detail": "이미 처리 중입니다."}` |
 | 4 정리 | `POST /api/sessions/{id}/organize` | `200 {"ranked": 115}` · 남았으면 `409 {"detail": "...", "remaining": 3}` |
 
-오류는 모두 `{"detail": "한국어 메시지"}` — 화면이 그대로 띄운다.
+오류는 모두 `{"detail": "한국어 메시지"}` — 화면이 그대로 띄운다. 동작(처리·정리·새 목록)이 실패해서 띄운 오류는 다음 동작이 성공하거나 세션을 바꿀 때까지 두고, 조회 실패로 띄운 오류는 다음 조회가 성공하면 사라진다.
 
 ```jsonc
 // Session

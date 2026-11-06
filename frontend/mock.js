@@ -38,7 +38,7 @@ function makeSession(asOf, seeded) {
       sector_code: '', sector_name: r[9], description: r[10],
       is_caution: false, is_foreign: false,
       state: 'pending', analyzed_at: null, error_message: '', report_id: '',
-      decision_label: '', score: null, agents_rated: 0, agents_total: 10, rank: null,
+      decision_label: '', score: null, agents_rated: 0, agents_total: 0, rank: null,
       _result: r[11],
     };
     if (seeded && i < 3) finish(item, SEEDED_STAMPS[i]);
@@ -59,6 +59,7 @@ function finish(item, reportStamp) {
   item.decision_label = res[0];
   item.score = res[1];
   item.agents_rated = res[2];
+  item.agents_total = 10;   // 끝난 종목은 에이전트 10개 기준 (처리 전에는 0, 백엔드와 같다)
   item.error_message = '';
 }
 
@@ -111,14 +112,14 @@ export function createMockApi(ApiError) {
       const s = find(id);
       const c = counts(s.items);
       const remaining = c.pending + c.running;
-      if (remaining > 0) throw new ApiError(409, { detail: `남은 종목 ${remaining}개가 끝나야 정리할 수 있습니다.`, remaining });
+      if (remaining > 0) throw new ApiError(409, { detail: `남은 ${remaining}개가 끝나야 정리할 수 있습니다.`, remaining });
       s.items.forEach((it) => { it.rank = null; });
       s.items.filter((it) => it.state === 'done')
         .sort((a, b) => (b.score - a.score) || (a.seq - b.seq))
         .forEach((it, k) => { it.rank = k + 1; });
       s.ranked_at = new Date().toISOString();
       s.rank_stale = false;
-      return delay({ ranked: c.done });
+      return delay({ ranked: c.done, unscored: 0 });
     },
   };
 }
