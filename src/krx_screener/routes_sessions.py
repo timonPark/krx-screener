@@ -170,12 +170,13 @@ def get_session(session_id: str, request: Request) -> SessionDetailOut:
         counts = repo.counts(session.id)
         items = repo.items(session.id)
         processing = repo.is_locked(session.id)
+        rank_stale = repo.rank_is_stale(session.id)
     return SessionDetailOut(
         session=SessionOut.of(session),
         # 처리 중인지는 세션의 처리 잠금으로 안다. 종목 상태(running)는 처리하던 프로세스가 죽으면 남을 수 있다.
         processing=processing,
         ranked_at=_utc(session.ranked_at),
-        rank_stale=False,  # 정리(#24) 이후 재분석 여부는 #25 가 계산한다
+        rank_stale=rank_stale,  # 정리 뒤에 분석이 바뀌어 다시 정리하면 순위가 달라질 수 있으면 true (#25)
         counts=CountsOut(**counts),
         items=[ItemOut.of(i) for i in items],
     )
