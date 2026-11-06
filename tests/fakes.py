@@ -84,10 +84,16 @@ class FakeAnalysisServer:
         health_error: str | None = None,
         report_ids: Mapping[str, str | None] | None = None,
         report_error: str | None = None,
+        state_log_root: Path | None = None,
+        agent_ratings: Mapping[str, Mapping[str, str | None]] | None = None,
     ) -> None:
         self.decisions = dict(decisions or {})
         self.report_ids = dict(report_ids or {})  # 종목코드 → 보고서 번호. None 이면 보고서를 저장하지 않은 것
         self.report_error = report_error  # 보고서 번호를 읽는 호출이 이 한국어 오류로 실패한다
+        # 분석이 끝나면 실제 서버처럼 상태 로그를 쓴다. None 이면 쓰지 않는다 (서버가 다른 컴퓨터에 있는 상황).
+        self.state_log_root = state_log_root
+        self.agent_ratings = dict(agent_ratings or {})  # 종목코드 → 에이전트 → 등급 (None 이면 그 칸을 비움). 기본은 모두 Hold
+        self._dates: dict[str, str] = {}
         self.errors = set(errors)
         self.polls_before_done = polls_before_done
         self.health_error = health_error
@@ -100,6 +106,7 @@ class FakeAnalysisServer:
 
     def start(self, ticker: str, trade_date: str, effort: str) -> str:
         self.started.append((ticker, trade_date, effort))
+        self._dates[ticker] = trade_date
         return f"run-{ticker}"
 
     def report_id(self, run_id: str) -> str | None:
@@ -116,6 +123,8 @@ class FakeAnalysisServer:
             return {"status": "running"}
         if code in self.errors:
             return {"status": "error", "error": "가짜 서버 오류"}
+        if self.state_log_root is not None:  # 서버는 분석을 마치면서 상태 로그를 쓴다 (같은 종목·기준일이면 덮어쓴다)
+            write_state_log(self.state_log_root, code, date.fromisoformat(self._dates[code]), self.agent_ratings.get(code))
         return {"status": "done", "decision": self.decisions.get(code, "Hold")}
 
 
@@ -216,7 +225,7 @@ def make_externals(state_log_root: Path, **overrides: Any) -> Externals:
                 "003490": SectorInfo("33", "항공사", "여객·화물 운송"),
             }
         ),
-        analysis=FakeAnalysisServer(),
+        analysis=FakeAnalysisServer(state_log_root=state_log_root),
         state_log_root=state_log_root,
     )
     return replace(base, **overrides)

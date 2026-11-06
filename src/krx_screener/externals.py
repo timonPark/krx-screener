@@ -10,7 +10,7 @@
 | ``trend`` | 투자자별 수급 (네이버) | ``flow.naver_trend`` |
 | ``sector`` | 업종 코드·업종명·기업 설명 | 이슈 #16 에서 구현 |
 | ``analysis`` | TradingAgents-KR 분석 서버 | ``analysis.AnalysisClient`` |
-| ``state_log_root`` | 분석 상태 로그가 쌓이는 폴더 | 이슈 #21 에서 읽기 구현 |
+| ``state_log_root`` | 분석 상태 로그가 쌓이는 폴더 | ``agent_ratings.read_agent_ratings`` 가 읽는다 |
 """
 
 from __future__ import annotations

@@ -10,8 +10,8 @@
 - 세션 단위 잠금(#18)은 요청을 받은 쪽이 쥔 연결로 넘어온다. 이 함수는 그 연결로 일하고, 끝나면 연결을 닫아서 잠금을 푼다
   (프로세스가 죽어도 연결이 끊겨 DB 가 풀어 준다).
 
-보고서 번호(#20)는 분석이 끝난 종목에 저장한다 (읽지 못해도 등급은 저장한다). 에이전트별 등급 읽기와 평가점수(#21, #22)는
-이후 이슈가 이 흐름에 더한다. 지금은 서버가 알려준 최종 등급과 보고서 번호만 저장하고 점수는 비워 둔다.
+보고서 번호(#20)와 에이전트별 등급(#21)은 분석이 끝난 종목에 저장한다 (읽지 못해도 최종 등급은 저장한다). 평가점수와 에이전트 수(#22)는
+이후 이슈가 이 흐름에 더한다. 지금은 점수를 비워 둔다.
 """
 
 from __future__ import annotations
@@ -20,6 +20,7 @@ import logging
 import uuid
 from datetime import date
 
+from krx_screener.agent_ratings import read_agent_ratings
 from krx_screener.analysis import DONE, run_one
 from krx_screener.repository import NotFoundError, SessionRepository
 
@@ -51,15 +52,20 @@ def process_codes(deps, conn, session_id: uuid.UUID, as_of: date, codes: list[st
                     cfg.poll_interval_seconds,
                 )
                 if outcome.status == DONE:
-                    repo.mark_done(
-                        session_id,
-                        code,
-                        decision=outcome.decision or "",
-                        score=None,  # 평가점수는 #22 가 채운다
-                        agents_rated=0,
-                        agents_total=0,
-                        report_id=outcome.report_id,  # 서버의 실행 번호(run_id)는 저장하지 않는다
-                    )
+                    # 분석이 끝난 직후에 읽는다: 같은 종목·기준일을 다시 분석하면 로그 파일이 덮어써진다.
+                    # 못 읽은 에이전트는 빈다. 읽지 못해도 분석 결과(등급)는 저장한다.
+                    ratings = read_agent_ratings(deps.externals.state_log_root, code, as_of)
+                    with conn.transaction():  # 완료 표시와 에이전트별 등급이 함께 반영되거나 함께 안 된다
+                        repo.mark_done(
+                            session_id,
+                            code,
+                            decision=outcome.decision or "",
+                            score=None,  # 평가점수는 #22 가 채운다
+                            agents_rated=0,
+                            agents_total=0,
+                            report_id=outcome.report_id,  # 서버의 실행 번호(run_id)는 저장하지 않는다
+                        )
+                        repo.save_agent_ratings(session_id, code, ratings)  # 옛 등급 행은 새 값으로 통째로 바뀐다
                 else:
                     repo.mark_failed(session_id, code, outcome.message or "분석에 실패했습니다.")
             except NotFoundError:
