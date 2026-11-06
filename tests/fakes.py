@@ -17,12 +17,18 @@ import pandas as pd
 from helpers import make_history, make_listing, passing_closes
 
 from krx_screener.analysis import RATING_LABELS, AnalysisError
+from krx_screener.config import Config, load_config
 from krx_screener.externals import Externals, SectorInfo
 from krx_screener.flow import FlowFetchError
 from krx_screener.prices import PriceFetchError
 
 AS_OF = date(2026, 11, 5)
 CODES = ("028050", "207940", "003490")
+
+
+def repo_config() -> Config:
+    """저장소의 config.yaml (목록 조건·분석 설정). 테스트는 실제 설정 그대로 검증한다."""
+    return load_config(Path(__file__).resolve().parents[1] / "config.yaml")
 
 
 class FakePrices:

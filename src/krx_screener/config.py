@@ -30,8 +30,8 @@ class Filters:
     min_avg_trading_value_krw: int
     avg_trading_value_window: int
     price_above_ma: tuple[int, ...]
-    rsi_period: int
-    rsi_max: float
+    rsi_period: int  # RSI 값을 계산하는 기간 (조건이 없어도 값은 저장한다)
+    rsi_max: float | None  # None 이면 RSI 조건을 두지 않는다
 
     @property
     def required_rows(self) -> int:
@@ -108,7 +108,6 @@ def parse_config(raw: Any) -> Config:
         "avg_trading_value_window",
         "price_above_ma",
         "rsi_period",
-        "rsi_max",
     } - set(f)
     if missing:
         raise ConfigError(f"설정 'filters' 에 빠진 항목이 있습니다: {sorted(missing)}")
@@ -116,8 +115,10 @@ def parse_config(raw: Any) -> Config:
     mas = f["price_above_ma"]
     if not isinstance(mas, list) or not mas:
         raise ConfigError("설정 'filters.price_above_ma' 는 이동평균 기간의 비어 있지 않은 목록이어야 합니다.")
-    rsi_max = f["rsi_max"]
-    if isinstance(rsi_max, bool) or not isinstance(rsi_max, (int, float)) or not 0 < rsi_max <= 100:
+    rsi_max = f.get("rsi_max")  # 없거나 null 이면 RSI 조건을 두지 않는다
+    if rsi_max is not None and (
+        isinstance(rsi_max, bool) or not isinstance(rsi_max, (int, float)) or not 0 < rsi_max <= 100
+    ):
         raise ConfigError(f"설정 'filters.rsi_max' 는 0 초과 100 이하의 숫자여야 합니다 (현재: {rsi_max!r}).")
 
     filters = Filters(
@@ -125,7 +126,7 @@ def parse_config(raw: Any) -> Config:
         avg_trading_value_window=_positive_int(f["avg_trading_value_window"], "filters.avg_trading_value_window"),
         price_above_ma=tuple(_positive_int(n, "filters.price_above_ma") for n in mas),
         rsi_period=_positive_int(f["rsi_period"], "filters.rsi_period"),
-        rsi_max=float(rsi_max),
+        rsi_max=None if rsi_max is None else float(rsi_max),
     )
     return Config(
         exclude=exclude,

@@ -22,7 +22,8 @@ def test_repo_config_matches_agreed_rules():
     assert f.min_avg_trading_value_krw == 1_000_000_000
     assert f.avg_trading_value_window == 20
     assert f.price_above_ma == (20, 60)
-    assert (f.rsi_period, f.rsi_max) == (14, 70.0)
+    assert f.rsi_period == 14
+    assert f.rsi_max is None  # RSI 조건은 두지 않는다 (값은 계산해서 저장한다)
     assert f.required_rows == 60
     # 수급은 표시만 하고 후보를 거르지 않는다
     assert (cfg.flow.mode, cfg.flow.window_days) == ("mark", 5)
@@ -93,6 +94,18 @@ def test_invalid_analysis_config_is_rejected(analysis, message):
         parse_config(raw)
 
 
+def test_rsi_condition_is_optional_and_validated_when_given():
+    raw = _raw()
+    raw["filters"].pop("rsi_max", None)
+    assert parse_config(raw).filters.rsi_max is None  # 없으면 조건 없음
+
+    raw["filters"]["rsi_max"] = None
+    assert parse_config(raw).filters.rsi_max is None  # null 도 조건 없음
+
+    raw["filters"]["rsi_max"] = 70
+    assert parse_config(raw).filters.rsi_max == 70.0  # 켜고 싶으면 숫자를 준다
+
+
 def test_required_rows_covers_rsi_warmup():
     raw = _raw()
     raw["filters"]["price_above_ma"] = [5]
@@ -113,7 +126,7 @@ def test_required_rows_covers_rsi_warmup():
         (lambda r: r["filters"].update(avg_trading_value_window=True), "avg_trading_value_window"),
         (lambda r: r["filters"].update(price_above_ma=[]), "price_above_ma"),
         (lambda r: r["filters"].update(price_above_ma=[20, "x"]), "price_above_ma"),
-        (lambda r: r["filters"].pop("rsi_max"), "빠진 항목"),
+        (lambda r: r["filters"].pop("rsi_period"), "빠진 항목"),
         (lambda r: r.pop("filters"), "filters"),
     ],
 )
