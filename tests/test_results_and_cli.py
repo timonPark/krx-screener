@@ -125,7 +125,10 @@ def fake_world(monkeypatch):
 def _run(tmp_path, *extra):
     return CliRunner().invoke(
         cli.app,
-        ["run", "--config", str(REPO_CONFIG), "--out", str(tmp_path / "out"), "--cache", str(tmp_path / "cache"), *extra],
+        [
+            "run", "--config", str(REPO_CONFIG), "--out", str(tmp_path / "out"),
+            "--cache", str(tmp_path / "cache"), "--db", str(tmp_path / "q.db"), *extra,
+        ],
     )
 
 
@@ -172,7 +175,9 @@ def test_run_command_input_errors(tmp_path, fake_world, args, exit_code, message
 def test_run_command_bad_config(tmp_path, fake_world):
     bad = tmp_path / "bad.yaml"
     bad.write_text("filters: {}\n", encoding="utf-8")
-    result = CliRunner().invoke(cli.app, ["run", "--config", str(bad), "--out", str(tmp_path / "out")])
+    result = CliRunner().invoke(
+        cli.app, ["run", "--config", str(bad), "--out", str(tmp_path / "out"), "--db", str(tmp_path / "q.db")]
+    )
     assert result.exit_code == 2
     assert "설정" in result.output
 

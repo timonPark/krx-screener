@@ -23,6 +23,14 @@ flow:
   # 상태: 양호(외국인·기관 둘 다 합계 > 0) · 부분(한쪽만 > 0) · 약함(둘 다 0 이하) · 미확인
   # 미확인(조회 실패·빈 응답·기준일 데이터 없음)은 어떤 모드에서도 탈락시키지 않는다.
 
+# 3단계: 후보를 TradingAgents-KR(로컬 서버)로 보내 전체 분석을 돌린다. 종목당 몇 분이 걸리고
+# Max 플랜 쿼터를 쓴다. `krx-screener analyze --limit N` 으로 명시한 개수만 보낸다.
+analysis:
+  base_url: http://127.0.0.1:8000
+  effort: low               # low | medium | high | xhigh | max (서버가 받는 값)
+  timeout_seconds: 1800     # 종목 하나를 기다리는 최대 시간. 서버에는 취소 API 가 없다
+  poll_interval_seconds: 5
+
 # 1단계 필터 (시세 기반, 모델 미사용). 네 조건을 모두 만족해야 후보가 된다.
 filters:
   # 거래대금은 종가 × 거래량으로 근사한 값이다 (실제 거래대금이 아님).
