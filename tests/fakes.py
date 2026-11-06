@@ -190,7 +190,8 @@ def make_externals(state_log_root: Path, **overrides: Any) -> Externals:
     )
     base = Externals(
         listing=lambda: listing.copy(),
-        prices=FakePrices({c: make_history(passing_closes(), 3_000_000, AS_OF) for c in CODES}),
+        # 삼성전자(005930)는 거래일 확인용 기준 종목이라 기본 세계에 늘 들어 있다
+        prices=FakePrices({c: make_history(passing_closes(), 3_000_000, AS_OF) for c in (*CODES, "005930")}),
         trend=FakeTrend({c: trend_rows() for c in CODES}),
         sector=FakeSector(
             {
