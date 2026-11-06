@@ -8,13 +8,14 @@
    RSI 는 값만 저장하고 조건으로 쓰지 않는다 (설정에 ``rsi_max`` 가 없을 때).
 4. 평균 거래대금이 큰 순서로 순번을 매긴다 (1부터).
 5. 목록에 남은 종목에만 수급을 조회해 상태와 순매수 합계를 채운다 (#15). **표시만 하고 종목을 거르지 않는다.**
+6. 목록에 남은 종목에만 업종 코드·업종명·기업 설명을 조회해 채운다 (#16). 읽지 못한 종목은 빈 칸이다.
 
-시세를 받지 못했거나 이력이 부족한 종목은 목록에 넣지 않는다 (지어내지 않는다). 업종(#16)은 이 목록을
-만든 뒤 채운다.
+시세를 받지 못했거나 이력이 부족한 종목은 목록에 넣지 않는다 (지어내지 않는다).
 """
 
 from __future__ import annotations
 
+import logging
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date
 from pathlib import Path
@@ -27,6 +28,8 @@ from krx_screener.flow import fetch_flow
 from krx_screener.prices import PriceStore
 from krx_screener.repository import Item
 from krx_screener.screen import lookback_days, run_screen
+
+logger = logging.getLogger(__name__)
 
 
 def _to_item(seq: int, row: dict[str, Any]) -> Item:
@@ -64,6 +67,26 @@ def _apply_flow(
         item.institution_net_5d = reading.institution
 
 
+def _read_sector(externals: Externals, code: str):
+    """업종 조회는 어떤 이유로든 목록 만들기를 멈추게 하지 않는다 (읽지 못하면 빈 칸)."""
+    try:
+        return externals.sector(code)
+    except Exception:  # noqa: BLE001 — 외부 경계의 예측하지 못한 실패가 세션 생성 전체를 막으면 안 된다
+        logger.warning("업종 조회 실패 (%s) — 빈 칸으로 둔다", code, exc_info=True)
+        return None
+
+
+def _apply_sector(items: list[Item], externals: Externals, workers: int) -> None:
+    """종목마다 업종 코드·업종명·기업 설명을 채운다. 읽지 못한 종목은 세 값 모두 빈 칸이다."""
+    with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
+        infos = list(pool.map(lambda it: _read_sector(externals, it.code), items))
+    for item, info in zip(items, infos, strict=True):
+        if info is not None:
+            item.sector_code = info.code
+            item.sector_name = info.name
+            item.description = info.description
+
+
 def build_items(
     externals: Externals,
     config: Config,
@@ -88,4 +111,5 @@ def build_items(
     rows = result.candidates.to_dict("records") if not result.candidates.empty else []
     items = [_to_item(seq, row) for seq, row in enumerate(rows, start=1)]
     _apply_flow(items, externals, config, as_of, workers, retry_wait)
+    _apply_sector(items, externals, workers)
     return items
