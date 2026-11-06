@@ -128,12 +128,12 @@ def _run(tmp_path, *extra):
         cli.app,
         [
             "run", "--config", str(REPO_CONFIG), "--out", str(tmp_path / "out"),
-            "--cache", str(tmp_path / "cache"), "--db", str(tmp_path / "q.db"), *extra,
+            "--cache", str(tmp_path / "cache"), *extra,
         ],
     )
 
 
-def test_run_command_writes_results_and_reuses_cache(tmp_path, fake_world):
+def test_run_command_writes_results_and_reuses_cache(tmp_path, fake_world, queue_db):
     first = _run(tmp_path)
     assert first.exit_code == 0, first.output
     out = tmp_path / "out" / "2026-11-06"
@@ -152,7 +152,7 @@ def test_run_command_writes_results_and_reuses_cache(tmp_path, fake_world):
     assert {"000010", "000020", "0126Z0"} <= set(fake_world[len(calls_after_first) + 1:])
 
 
-def test_run_command_explicit_date_and_limit(tmp_path, fake_world):
+def test_run_command_explicit_date_and_limit(tmp_path, fake_world, queue_db):
     result = _run(tmp_path, "--date", "2026-11-05", "--limit", "1")
     assert result.exit_code == 0, result.output
     frame = pd.read_csv(tmp_path / "out" / "2026-11-05" / "candidates.csv", dtype={"code": str})
@@ -177,13 +177,13 @@ def test_run_command_bad_config(tmp_path, fake_world):
     bad = tmp_path / "bad.yaml"
     bad.write_text("filters: {}\n", encoding="utf-8")
     result = CliRunner().invoke(
-        cli.app, ["run", "--config", str(bad), "--out", str(tmp_path / "out"), "--db", str(tmp_path / "q.db")]
+        cli.app, ["run", "--config", str(bad), "--out", str(tmp_path / "out")]
     )
     assert result.exit_code == 2
     assert "설정" in result.output
 
 
-def test_run_command_adds_flow_columns_and_keeps_unconfirmed(tmp_path, fake_world):
+def test_run_command_adds_flow_columns_and_keeps_unconfirmed(tmp_path, fake_world, queue_db):
     fake_world.flow_fail.add("000020")
     result = _run(tmp_path)
     assert result.exit_code == 0, result.output

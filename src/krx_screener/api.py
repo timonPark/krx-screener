@@ -26,11 +26,13 @@ from fastapi.staticfiles import StaticFiles
 from krx_screener.analysis import AnalysisError
 from krx_screener.asof import AsOfError, AsOfUnavailableError
 from krx_screener.config import Config
-from krx_screener.db import DatabaseError
+from krx_screener.db import MIGRATIONS, DatabaseError
 from krx_screener.externals import Externals
 from krx_screener.repository import NotFoundError
 from krx_screener.routes_sessions import router as sessions_router
 from krx_screener.universe import UniverseFetchError
+
+STALE_SCHEMA = "DB 스키마가 최신이 아닙니다. `python -m krx_screener.db init` 을 실행하세요."
 
 
 def today_kst() -> date:
@@ -56,6 +58,12 @@ def create_app(deps: Dependencies) -> FastAPI:
     @app.exception_handler(DatabaseError)
     def database_error(_: Request, exc: DatabaseError) -> JSONResponse:
         return JSONResponse(status_code=503, content={"detail": str(exc)})
+
+    @app.exception_handler(psycopg.errors.UndefinedColumn)
+    @app.exception_handler(psycopg.errors.UndefinedTable)
+    def schema_is_old(_: Request, exc: Exception) -> JSONResponse:
+        # 코드는 새 스키마를 쓰는데 DB 에 `db init` 을 하지 않았다 → 알 수 없는 서버 오류 대신 할 일을 알려준다
+        return JSONResponse(status_code=503, content={"detail": STALE_SCHEMA})
 
     @app.exception_handler(AnalysisError)
     def analysis_unavailable(_: Request, exc: AnalysisError) -> JSONResponse:
@@ -105,6 +113,8 @@ def create_app(deps: Dependencies) -> FastAPI:
                 raise DatabaseError(
                     "DB 스키마가 없습니다. `python -m krx_screener.db init` 을 실행하세요."
                 ) from None
+        if version is None or version < MIGRATIONS[-1][0]:
+            raise DatabaseError(STALE_SCHEMA)
         return {"status": "ok", "db": "ok", "schema_version": version}
 
     app.include_router(sessions_router)

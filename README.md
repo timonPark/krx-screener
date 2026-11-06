@@ -19,6 +19,7 @@
 
 ```bash
 uv venv --python 3.13 && uv pip install -e ".[dev]"
+# run·analyze·list 는 분석 대기열(PostgreSQL)을 쓴다: 아래 "웹 화면" 의 DB 준비(docker compose up -d, 환경변수, db init)를 먼저 한다
 .venv/bin/krx-screener universe          # 전종목 목록의 종류별 개수
 .venv/bin/krx-screener run               # 1단계 필터 실행 (기본 기준일: 직전 영업일, 약 1~2분)
 .venv/bin/krx-screener run --date 2026-11-05
@@ -46,7 +47,7 @@ export KRX_SCREENER_DATABASE_URL=postgresql://krx:krx@127.0.0.1:5433/krx_screene
   최근 5거래일 외국인·기관 순매수 합계(주), 수급 상태 `양호`/`부분`/`약함`/`미확인`)
 - `run.json`: 그날 쓴 설정, 단계별 종목 수, 탈락 사유별 개수, 판정 불가 종목과 사유
 
-`analyze` 는 TradingAgents-KR 로컬 서버(`config.yaml` 의 `analysis.base_url`)가 떠 있어야 하고, 종목마다 몇 분이 걸리며 Max 플랜 쿼터를 쓴다. 그래서 `--count` 가 필수이고 실행 전에 확인을 묻는다 (`--yes` 로 생략). 후보를 거래대금 큰 순서로 한 개씩 보내고, 결과는 `results/<기준일>/analysis.csv` 에 종목마다 저장한다. 후보 목록과 상태는 SQLite 대기열 `krx-screener.db` 에 적고, 멈췄다가 다시 실행하면 끝나지 않은 종목부터 이어서 한다. 이미 끝난 종목은 다시 보내지 않는다 (`--redo` 로 다시 분석하며, 실패해도 기존 등급은 지우지 않는다). `--dry-run` 은 서버에 연결하지 않고 보낼 목록과 예상 시간만 보여준다. 영숫자 종목코드(예: `0126Z0`)는 서버가 거절해서 보내지 않고 "건너뜀" 으로 기록한다.
+`analyze` 는 TradingAgents-KR 로컬 서버(`config.yaml` 의 `analysis.base_url`)가 떠 있어야 하고, 종목마다 몇 분이 걸리며 Max 플랜 쿼터를 쓴다. 그래서 `--count` 가 필수이고 실행 전에 확인을 묻는다 (`--yes` 로 생략). 후보를 거래대금 큰 순서로 한 개씩 보내고, 결과는 `results/<기준일>/analysis.csv` 에 종목마다 저장한다. 후보 목록과 상태는 분석 대기열(PostgreSQL, 환경변수 `KRX_SCREENER_DATABASE_URL`)에 적고, 멈췄다가 다시 실행하면 끝나지 않은 종목부터 이어서 한다. 대기열은 기준일마다 웹 화면의 세션 하나로도 보이고(점수·보고서 번호·순위도 웹과 같이 저장된다), 웹 화면이나 다른 `analyze` 가 같은 목록을 처리 중이면 시작하지 않는다. `krx-screener list` 는 대기열의 전체 목록과 처리 여부를 보여준다 (`--state pending|running|done|failed|skipped`). 후보에서 빠진 끝난 분석은 지우지 않고 보관한다. 이미 끝난 종목은 다시 보내지 않는다 (`--redo` 로 다시 분석하며, 실패해도 기존 등급은 지우지 않는다). `--dry-run` 은 서버에 연결하지 않고 보낼 목록과 예상 시간만 보여준다. 영숫자 종목코드(예: `0126Z0`)는 서버가 거절해서 보내지 않고 "건너뜀" 으로 기록한다.
 
 시세는 `cache/` 에 기준일별로 저장되어 같은 기준일로 다시 돌리면 네트워크를 쓰지 않는다 (`--refresh` 로 다시 받음).
 
