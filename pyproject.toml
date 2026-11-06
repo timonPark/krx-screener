@@ -16,6 +16,8 @@ dependencies = [
     "pyyaml>=6.0",
     # 세션·분석 결과 저장소 (PostgreSQL). 접속 정보는 환경변수로만 받는다.
     "psycopg[binary]>=3.2",
+    # 웹 API (화면이 부르는 주소). 서버 실행(uvicorn)은 이슈 #26 에서 더한다.
+    "fastapi>=0.115",
     # 수급(네이버 증권) 조회에서 직접 사용. FinanceDataReader 가 끌고 오지만 명시한다.
     "requests>=2.32",
     "rich>=14.0",
@@ -25,6 +27,7 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
     "pytest>=8.0",
+    "httpx2>=2.0",   # FastAPI 테스트 클라이언트가 쓴다 (Starlette 가 httpx 대신 이걸 쓰라고 안내)
     "ruff>=0.16",
 ]
 

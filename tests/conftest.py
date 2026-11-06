@@ -11,8 +11,11 @@
 import os
 
 import pytest
+from fakes import make_externals
+from fastapi.testclient import TestClient
 
 from krx_screener import db
+from krx_screener.api import Dependencies, create_app
 from krx_screener.repository import SessionRepository
 
 TEST_URL_ENV = "KRX_SCREENER_TEST_DATABASE_URL"
@@ -41,3 +44,17 @@ def pg_conn():
 @pytest.fixture
 def repo(pg_conn):
     return SessionRepository(pg_conn)
+
+
+@pytest.fixture
+def externals(tmp_path):
+    """외부 경계의 가짜들 (기본 세계). 필요한 경계만 ``dataclasses.replace`` 로 바꿔 쓴다."""
+    return make_externals(tmp_path / "state_logs")
+
+
+@pytest.fixture
+def client(pg_conn, externals):
+    """웹 API 테스트 클라이언트: 진짜 테스트 DB + 가짜 외부 경계. 이 경계(HTTP)에서 동작을 검증한다."""
+    url = os.environ[TEST_URL_ENV]
+    app = create_app(Dependencies(connect=lambda: db.connect(url), externals=externals))
+    return TestClient(app)
