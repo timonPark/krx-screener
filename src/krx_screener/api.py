@@ -20,6 +20,7 @@ from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
+from krx_screener.analysis import AnalysisError
 from krx_screener.asof import AsOfError, AsOfUnavailableError
 from krx_screener.config import Config
 from krx_screener.db import DatabaseError
@@ -52,6 +53,11 @@ def create_app(deps: Dependencies) -> FastAPI:
     def database_error(_: Request, exc: DatabaseError) -> JSONResponse:
         return JSONResponse(status_code=503, content={"detail": str(exc)})
 
+    @app.exception_handler(AnalysisError)
+    def analysis_unavailable(_: Request, exc: AnalysisError) -> JSONResponse:
+        # TradingAgents-KR 서버에 연결하지 못했거나 요청을 거절했다 = 외부 장애
+        return JSONResponse(status_code=503, content={"detail": str(exc)})
+
     @app.exception_handler(NotFoundError)
     def not_found(_: Request, exc: NotFoundError) -> JSONResponse:
         return JSONResponse(status_code=404, content={"detail": str(exc)})
@@ -79,6 +85,8 @@ def create_app(deps: Dependencies) -> FastAPI:
                 message = "기준일(as_of)을 입력하세요 (예: 2026-11-05)."
             else:
                 message = "기준일 형식이 올바르지 않습니다 (예: 2026-11-05)."
+        elif {"offset", "count"} & set(first.get("loc", ())):
+            message = "오프셋은 0 이상, 개수는 1 이상의 정수로 입력하세요."
         else:
             message = "요청 형식이 올바르지 않습니다."
         return JSONResponse(status_code=422, content={"detail": message})
