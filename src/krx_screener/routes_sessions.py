@@ -4,6 +4,7 @@
 - ``GET  /api/sessions``  → 최근 순 세션 목록
 - ``GET  /api/sessions/{id}``  (``id`` 에 ``latest`` 가능) → 세션 전체 조회 (#23)
 - ``POST /api/sessions/{id}/process``  ``{"offset": 0, "count": 10}`` → 구간 처리 시작 (#17)
+- ``POST /api/sessions/{id}/organize``  → 정리: 끝난 종목에 점수 순위를 매긴다 (#24)
 
 기준일은 거래일이어야 한다. 입력이 잘못되면 422, 거래일이나 전종목 목록을 받을 수 없는 외부 장애면 503 이고,
 둘 다 ``{"detail": "한국어 메시지"}`` 다.
@@ -217,3 +218,29 @@ def process(session_id: str, body: ProcessRequest, request: Request, background:
     finally:
         if not handed_over:
             conn.close()
+
+
+@router.post("/{session_id}/organize", response_model=None)
+def organize(session_id: str, request: Request) -> JSONResponse:
+    """세션의 끝난 종목에 점수 높은 순으로 순위를 매긴다 (점수가 같으면 순번이 앞선 종목이 위).
+
+    ``200 {"ranked": N, "unscored": M}`` — ``unscored`` 는 끝났지만 점수가 없어 순위에서 뺀 종목 수다.
+    대기·처리 중인 종목이 하나라도 있으면 ``409 {"detail": "…", "remaining": N}`` 이고 아무것도 바꾸지 않는다.
+    실패한 종목은 남은 개수에 넣지 않고 순위에서 뺀다. 처리 중인 세션은 정리하지 않는다 (같은 세션 잠금을 쓴다).
+    """
+    with request.app.state.deps.connect() as conn:
+        conn.autocommit = True
+        repo = SessionRepository(conn)
+        session = _find_session(repo, session_id)
+        # 처리와 같은 잠금: 정리하는 동안 같은 세션의 처리가 시작되어 점수가 바뀌지 않게 한다. 연결을 닫으면 풀린다
+        locked = repo.try_lock(session.id)
+        counts = repo.counts(session.id)
+        remaining = counts["pending"] + counts["running"]  # 실패는 남은 개수가 아니다 (비교에서 빠진다)
+        if not locked:
+            return JSONResponse(status_code=409, content={"detail": "이미 처리 중입니다.", "remaining": remaining})
+        if remaining:
+            return JSONResponse(
+                status_code=409, content={"detail": f"남은 {remaining}개가 끝나야 정리할 수 있습니다.", "remaining": remaining}
+            )
+        ranking = repo.organize(session.id)
+    return JSONResponse(status_code=200, content={"ranked": ranking.ranked, "unscored": ranking.unscored})

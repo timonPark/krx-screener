@@ -33,6 +33,14 @@ class Session:
     total: int  # 세션 안의 종목 수
 
 
+@dataclass(frozen=True)
+class Ranking:
+    """정리 결과."""
+
+    ranked: int  # 순위를 매긴 종목 수
+    unscored: int  # 끝났지만 점수가 없어 순위에서 뺀 종목 수
+
+
 @dataclass
 class Item:
     """세션 안의 종목 한 줄. 앞의 네 개는 목록을 만들 때 반드시 정해진다."""
@@ -227,6 +235,33 @@ class SessionRepository:
             "state = 'failed', error_message = %s, analyzed_at = COALESCE(%s, now())",
             (error_message, analyzed_at),
         )
+
+    # --- 정리 (순위) ---
+
+    def organize(self, session_id: uuid.UUID) -> Ranking:
+        """끝난 종목에 점수 높은 순으로 순위를 매기고 정리 시각을 적는다. 점수가 같으면 순번이 앞선 종목이 위다.
+
+        순위는 1 부터 빠짐없이 이어진다 (동점 묶기 없음). 실패한 종목과, 끝났지만 점수가 없는 종목(에이전트 등급을 하나도 못 읽음)은
+        비교에서 빼고 순위를 비운다 — 점수를 0 으로 지어내지 않는다. 이전 순위는 모두 지우고 새로 매긴다.
+        한 트랜잭션이라 중간에 실패하면 이전 순위와 정리 시각이 그대로 남는다.
+        """
+        with self._conn.transaction():
+            if self._conn.execute("SELECT 1 FROM sessions WHERE id = %s", (session_id,)).fetchone() is None:
+                raise NotFoundError("세션을 찾지 못했습니다.")
+            self._conn.execute("UPDATE session_items SET rank = NULL WHERE session_id = %s", (session_id,))
+            ranked = self._conn.execute(
+                "UPDATE session_items i SET rank = r.rn FROM ("
+                " SELECT seq, row_number() OVER (ORDER BY score DESC, seq ASC) AS rn FROM session_items"
+                " WHERE session_id = %s AND state = 'done' AND score IS NOT NULL) r"
+                " WHERE i.session_id = %s AND i.seq = r.seq",
+                (session_id, session_id),
+            ).rowcount
+            unscored = self._conn.execute(
+                "SELECT count(*) FROM session_items WHERE session_id = %s AND state = 'done' AND score IS NULL",
+                (session_id,),
+            ).fetchone()[0]
+            self._conn.execute("UPDATE sessions SET ranked_at = now() WHERE id = %s", (session_id,))
+        return Ranking(ranked=ranked, unscored=unscored)
 
     # --- 에이전트별 등급 ---
 

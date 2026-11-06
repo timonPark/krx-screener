@@ -148,7 +148,7 @@
 | 세션 목록 | `GET /api/sessions` | `Session[]` (최근 순) |
 | 3 조회 | `GET /api/sessions/{id}` (`id`에 `latest` 가능) | `SessionDetail` |
 | 2 나눠서 처리 | `POST /api/sessions/{id}/process` `{"offset": 0, "count": 10}` | `202 {"started": true, "queued": 7}` · 처리 중이면 `409 {"detail": "이미 처리 중입니다."}` |
-| 4 정리 | `POST /api/sessions/{id}/organize` | `200 {"ranked": 115}` · 남았으면 `409 {"detail": "…", "remaining": 3}` |
+| 4 정리 | `POST /api/sessions/{id}/organize` | `200 {"ranked": 115, "unscored": 0}` · 남았으면 `409 {"detail": "…", "remaining": 3}` · 처리 중이면 `409 {"detail": "이미 처리 중입니다.", "remaining": N}` |
 
 오류는 모두 `{"detail": "한국어 메시지"}`이고 화면이 그대로 띄운다.
 
