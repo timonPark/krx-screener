@@ -24,6 +24,7 @@ from krx_screener.asof import AsOfError, AsOfUnavailableError
 from krx_screener.config import Config
 from krx_screener.db import DatabaseError
 from krx_screener.externals import Externals
+from krx_screener.repository import NotFoundError
 from krx_screener.routes_sessions import router as sessions_router
 from krx_screener.universe import UniverseFetchError
 
@@ -50,6 +51,10 @@ def create_app(deps: Dependencies) -> FastAPI:
     @app.exception_handler(DatabaseError)
     def database_error(_: Request, exc: DatabaseError) -> JSONResponse:
         return JSONResponse(status_code=503, content={"detail": str(exc)})
+
+    @app.exception_handler(NotFoundError)
+    def not_found(_: Request, exc: NotFoundError) -> JSONResponse:
+        return JSONResponse(status_code=404, content={"detail": str(exc)})
 
     @app.exception_handler(UniverseFetchError)
     def universe_unavailable(_: Request, exc: UniverseFetchError) -> JSONResponse:
