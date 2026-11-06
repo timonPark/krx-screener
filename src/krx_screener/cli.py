@@ -15,6 +15,7 @@ from rich.table import Table
 from krx_screener import universe as uni
 from krx_screener.asof import AsOfError, resolve_as_of
 from krx_screener.config import ConfigError, load_config
+from krx_screener.flow import REASON_LABELS, STATUS_LABELS, apply_flow, naver_trend
 from krx_screener.prices import PriceStore, fdr_fetcher
 from krx_screener.results import write_results
 from krx_screener.screen import condition_names, run_screen
@@ -153,6 +154,29 @@ def run(
 
         result = run_screen(classified, config, base, store, workers, on_progress)
 
+    # 1.5단계: 후보에만 수급 조회. 읽지 못한 종목은 항상 "미확인" 으로 남고 탈락하지 않는다.
+    with Progress(
+        TextColumn("수급 조회"),
+        BarColumn(),
+        TextColumn("{task.completed}/{task.total}"),
+        TimeElapsedColumn(),
+        console=console,
+    ) as flow_bar:
+        flow_task = flow_bar.add_task("flow", total=None)
+
+        def on_flow_progress(done: int, total: int) -> None:
+            flow_bar.update(flow_task, completed=done, total=total)
+
+        result.candidates, result.flow = apply_flow(
+            result.candidates,
+            config.flow.mode,
+            config.flow.window_days,
+            base,
+            naver_trend,
+            workers,
+            on_flow_progress,
+        )
+
     out_dir = write_results(result, config, out, datetime.now(ZoneInfo("Asia/Seoul")))
     _print_summary(result, config, out_dir)
 
@@ -166,6 +190,10 @@ def _print_summary(result, config, out_dir: Path) -> None:
     funnel.add_row("거래정지 의심 제외", f"-{result.zero_volume_excluded:,}")
     funnel.add_row("판정 불가 (시세 조회 실패·부족)", f"-{len(result.undetermined):,}")
     funnel.add_row("필터 판정 대상", f"{result.evaluated:,}")
+    if result.flow is not None and result.flow.mode == "filter":
+        # 표시만 모드에서는 1단계 후보와 최종 후보가 같아서 줄을 늘리지 않는다.
+        funnel.add_row("1단계 후보", f"{result.flow.stage1_candidates:,}")
+        funnel.add_row("수급 약함 탈락", f"-{result.flow.dropped_by_filter:,}")
     funnel.add_row("[bold]후보[/bold]", f"[bold]{len(result.candidates):,}[/bold]")
     console.print(funnel)
 
@@ -186,5 +214,15 @@ def _print_summary(result, config, out_dir: Path) -> None:
             f"{_KIND_NAMES.get(k, k)} {v:,}" for k, v in result.static_excluded_by_kind.items()
         )
         console.print(f"종류 제외(겹침 포함): {kinds}")
+    if result.flow is not None:
+        flow = result.flow
+        counts = " · ".join(f"{STATUS_LABELS[k]} {v:,}" for k, v in flow.status_counts.items())
+        mode = "표시만" if flow.mode == "mark" else "수급 약함 탈락"
+        console.print(f"수급(최근 {flow.window_days}거래일, {mode}): {counts}")
+        if flow.unconfirmed_by_reason:
+            reasons = " · ".join(
+                f"{REASON_LABELS.get(k, k)} {v:,}" for k, v in flow.unconfirmed_by_reason.items()
+            )
+            console.print(f"[yellow]수급 미확인 사유: {reasons} (run.json 에 종목별 사유)[/yellow]")
     console.print("[dim]거래대금은 종가 × 거래량 근사값입니다. 후보는 등급이 아니라 분석해 볼 만한 종목입니다.[/dim]")
     console.print(f"저장: {out_dir}/candidates.csv, run.json")

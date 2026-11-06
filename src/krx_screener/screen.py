@@ -14,6 +14,7 @@ from datetime import date
 import pandas as pd
 
 from krx_screener.config import Config, Filters
+from krx_screener.flow import FlowStats
 from krx_screener.indicators import avg_trading_value_approx, rsi_wilder, sma
 from krx_screener.prices import PriceFetchError, PriceStore
 
@@ -111,6 +112,7 @@ class ScreenResult:
     evaluated: int
     drop_first: dict[str, int]  # 첫 번째로 만족하지 못한 조건별 탈락 수 (합 = 탈락 수)
     fail_each: dict[str, int]  # 조건별로 독립적으로 센 불충족 수 (겹침 있음, 임계값 조정용)
+    flow: FlowStats | None = None  # 1.5단계를 돌렸을 때만
 
 
 def run_screen(

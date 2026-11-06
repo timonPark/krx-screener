@@ -10,6 +10,7 @@ from typer.testing import CliRunner
 from krx_screener import cli
 from krx_screener import universe as uni
 from krx_screener.config import load_config
+from krx_screener.flow import FlowFetchError, apply_flow
 from krx_screener.results import write_results
 from krx_screener.screen import run_screen
 
@@ -75,9 +76,25 @@ def test_write_results_overwrites_same_day_and_handles_zero_candidates(tmp_path)
 # --- run 명령 전체 흐름 (네트워크 없이 가짜 시세·목록) ---
 
 
+class _Calls(list):
+    """가짜 시세 조회 기록. ``flow_fail`` 에 넣은 종목코드는 수급 조회가 실패한다."""
+
+    def __init__(self):
+        super().__init__()
+        self.flow_fail: set[str] = set()
+
+
+def _naver_rows():
+    days = pd.bdate_range(end="2026-11-06", periods=10)
+    return [
+        {"bizdate": d.strftime("%Y%m%d"), "foreignerPureBuyQuant": "+100", "organPureBuyQuant": "+50"}
+        for d in reversed(days)
+    ]
+
+
 @pytest.fixture
 def fake_world(monkeypatch):
-    calls: list[str] = []
+    calls = _Calls()
 
     def fetch(code, start, end):
         calls.append(code)
@@ -93,7 +110,13 @@ def fake_world(monkeypatch):
             {"Code": "0126Z0", "Name": "영숫자코드"},
         ]
     )
+    def naver(code):
+        if code in calls.flow_fail:
+            raise FlowFetchError("HTTP 503")
+        return _naver_rows()
+
     monkeypatch.setattr(cli, "fdr_fetcher", fetch)
+    monkeypatch.setattr(cli, "naver_trend", naver)
     monkeypatch.setattr(uni, "fetch_listing", lambda: listing)
     monkeypatch.setattr(cli, "_today_kst", lambda: TODAY)
     return calls
@@ -152,3 +175,42 @@ def test_run_command_bad_config(tmp_path, fake_world):
     result = CliRunner().invoke(cli.app, ["run", "--config", str(bad), "--out", str(tmp_path / "out")])
     assert result.exit_code == 2
     assert "설정" in result.output
+
+
+def test_run_command_adds_flow_columns_and_keeps_unconfirmed(tmp_path, fake_world):
+    fake_world.flow_fail.add("000020")
+    result = _run(tmp_path)
+    assert result.exit_code == 0, result.output
+    out = tmp_path / "out" / "2026-11-06"
+
+    frame = pd.read_csv(out / "candidates.csv", dtype={"code": str}).set_index("code")
+    assert {"foreign_net_5d", "institution_net_5d", "flow_status"} <= set(frame.columns)
+    assert frame.loc["000010", "flow_status"] == "양호"
+    assert frame.loc["000010", "foreign_net_5d"] == 500
+    # 수급 조회에 실패해도 후보에서 빠지지 않고 "미확인" 으로 남는다
+    assert frame.loc["000020", "flow_status"] == "미확인"
+    assert pd.isna(frame.loc["000020", "foreign_net_5d"])
+    assert len(frame) == 3
+
+    info = json.loads((out / "run.json").read_text(encoding="utf-8"))
+    assert info["flow"]["mode"] == "mark"
+    assert info["flow"]["status_counts"] == {"strong": 2, "partial": 0, "weak": 0, "unconfirmed": 1}
+    assert info["flow"]["unconfirmed_by_reason"] == {"fetch_failed": 1}
+    assert info["flow"]["unconfirmed"][0]["code"] == "000020"
+    assert info["funnel"]["stage1_candidates"] == info["funnel"]["candidates"] == 3
+    assert "수급 미확인 사유" in result.output.replace("\n", "")
+    assert "조회 실패 1" in result.output.replace("\n", "")
+
+
+def test_run_json_flow_section_for_filter_mode(tmp_path):
+    classified = uni.classify(make_listing([{"Code": "000010", "Name": "통과전자"}]), AS_OF)
+    result = run_screen(classified, CONFIG, AS_OF, _Store())
+    weak = [{"bizdate": d.strftime("%Y%m%d"), "foreignerPureBuyQuant": "-1", "organPureBuyQuant": "-1"}
+            for d in pd.bdate_range(end="2026-11-06", periods=6)]
+    result.candidates, result.flow = apply_flow(result.candidates, "filter", 5, AS_OF, lambda c: weak)
+    out = write_results(result, CONFIG, tmp_path, datetime(2026, 11, 9))
+    info = json.loads((out / "run.json").read_text(encoding="utf-8"))
+    assert info["funnel"]["stage1_candidates"] == 1
+    assert info["funnel"]["candidates"] == 0
+    assert info["flow"]["dropped_by_filter"] == 1
+    assert "미확인" in info["approximations"]["flow"]

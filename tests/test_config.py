@@ -24,6 +24,39 @@ def test_repo_config_matches_agreed_rules():
     assert f.price_above_ma == (20, 60)
     assert (f.rsi_period, f.rsi_max) == (14, 70.0)
     assert f.required_rows == 60
+    # 수급은 표시만 하고 후보를 거르지 않는다
+    assert (cfg.flow.mode, cfg.flow.window_days) == ("mark", 5)
+
+
+def test_flow_section_is_optional_and_defaults_to_mark():
+    raw = _raw()
+    raw.pop("flow")
+    cfg = parse_config(raw)
+    assert (cfg.flow.mode, cfg.flow.window_days) == ("mark", 5)
+
+
+def test_flow_filter_mode_is_accepted():
+    raw = _raw()
+    raw["flow"] = {"mode": "filter", "window_days": 10}
+    cfg = parse_config(raw)
+    assert (cfg.flow.mode, cfg.flow.window_days) == ("filter", 10)
+
+
+@pytest.mark.parametrize(
+    ("flow", "message"),
+    [
+        ({"mode": "drop"}, "flow.mode"),
+        ({"mode": "mark", "window_days": 0}, "flow.window_days"),
+        ({"mode": "mark", "window_days": 11}, "10 이하"),
+        ({"mode": "mark", "window_days": True}, "flow.window_days"),
+        (["mark"], "flow"),
+    ],
+)
+def test_invalid_flow_config_is_rejected(flow, message):
+    raw = _raw()
+    raw["flow"] = flow
+    with pytest.raises(ConfigError, match=message):
+        parse_config(raw)
 
 
 def test_required_rows_covers_rsi_warmup():

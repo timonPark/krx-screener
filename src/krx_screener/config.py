@@ -43,10 +43,21 @@ class Filters:
         )
 
 
+FLOW_MODES: tuple[str, ...] = ("mark", "filter")
+MAX_FLOW_WINDOW_DAYS = 10  # 네이버 수급이 주는 이력 길이
+
+
+@dataclass(frozen=True)
+class FlowConfig:
+    mode: str  # "mark": 표시만 / "filter": 수급 약함 종목을 탈락
+    window_days: int
+
+
 @dataclass(frozen=True)
 class Config:
     exclude: frozenset[str]
     filters: Filters
+    flow: FlowConfig
     raw: dict[str, Any]  # run.json 에 그대로 남기기 위한 원본
 
 
@@ -103,7 +114,27 @@ def parse_config(raw: Any) -> Config:
         rsi_period=_positive_int(f["rsi_period"], "filters.rsi_period"),
         rsi_max=float(rsi_max),
     )
-    return Config(exclude=exclude, filters=filters, raw=raw)
+    return Config(exclude=exclude, filters=filters, flow=_parse_flow(raw.get("flow")), raw=raw)
+
+
+def _parse_flow(raw: Any) -> FlowConfig:
+    """``flow`` 항목은 생략할 수 있다 (기본값: 표시만, 최근 5거래일)."""
+    if raw is None:
+        return FlowConfig(mode="mark", window_days=5)
+    if not isinstance(raw, dict):
+        raise ConfigError("설정 'flow' 는 키-값 구조여야 합니다.")
+    mode = raw.get("mode", "mark")
+    if mode not in FLOW_MODES:
+        raise ConfigError(
+            f"설정 'flow.mode' 는 {' 또는 '.join(FLOW_MODES)} 여야 합니다 (현재: {mode!r})."
+        )
+    window = _positive_int(raw.get("window_days", 5), "flow.window_days")
+    if window > MAX_FLOW_WINDOW_DAYS:
+        raise ConfigError(
+            f"설정 'flow.window_days' 는 {MAX_FLOW_WINDOW_DAYS} 이하여야 합니다 "
+            f"(수급 데이터는 최근 {MAX_FLOW_WINDOW_DAYS}거래일만 제공, 현재: {window})."
+        )
+    return FlowConfig(mode=mode, window_days=window)
 
 
 def load_config(path: Path) -> Config:

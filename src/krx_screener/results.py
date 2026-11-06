@@ -8,13 +8,31 @@ from pathlib import Path
 
 from krx_screener import __version__
 from krx_screener.config import Config
+from krx_screener.flow import FlowStats
 from krx_screener.screen import ScreenResult
 
 APPROXIMATIONS = {
     "trading_value": "거래대금은 종가 × 거래량으로 근사한 값이며 실제 거래대금이 아닙니다.",
     "universe_kinds": "종목 종류(소속부·상장일)는 조회 시점 기준이며 기준일 당시의 값이 아닙니다.",
     "new_listing": "신규상장 판정은 공휴일을 반영하지 않고 평일 수로 센 근사값입니다.",
+    "flow": (
+        "수급은 네이버 증권(비공식 경로, 최근 10거래일, 수량(주) 기준)이며 금액·기관 세부 "
+        "구분이 아닙니다. 읽지 못한 종목은 '미확인'이고 수급 0 이 아닙니다."
+    ),
 }
+
+
+def _flow_info(flow: FlowStats) -> dict:
+    return {
+        "source": "네이버 증권 (비공식, 로그인 불필요)",
+        "mode": flow.mode,
+        "window_days": flow.window_days,
+        "checked": flow.stage1_candidates,
+        "status_counts": flow.status_counts,
+        "unconfirmed_by_reason": flow.unconfirmed_by_reason,
+        "dropped_by_filter": flow.dropped_by_filter,
+        "unconfirmed": flow.unconfirmed,
+    }
 
 
 def build_run_info(result: ScreenResult, config: Config, generated_at: datetime) -> dict:
@@ -37,6 +55,9 @@ def build_run_info(result: ScreenResult, config: Config, generated_at: datetime)
         "unmet_by_condition": result.fail_each,
         "undetermined": result.undetermined,
     }
+    if result.flow is not None:
+        info["funnel"]["stage1_candidates"] = result.flow.stage1_candidates
+        info["flow"] = _flow_info(result.flow)
     return info
 
 
