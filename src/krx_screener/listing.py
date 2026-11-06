@@ -7,13 +7,15 @@
 3. 시세 필터를 적용한다: 20거래일 평균 거래대금(종가×거래량 근사), 종가 > 20일선, 종가 > 60일선.
    RSI 는 값만 저장하고 조건으로 쓰지 않는다 (설정에 ``rsi_max`` 가 없을 때).
 4. 평균 거래대금이 큰 순서로 순번을 매긴다 (1부터).
+5. 목록에 남은 종목에만 수급을 조회해 상태와 순매수 합계를 채운다 (#15). **표시만 하고 종목을 거르지 않는다.**
 
-시세를 받지 못했거나 이력이 부족한 종목은 목록에 넣지 않는다 (지어내지 않는다). 수급(#15)과 업종(#16)은
-이 목록을 만든 뒤 채운다.
+시세를 받지 못했거나 이력이 부족한 종목은 목록에 넣지 않는다 (지어내지 않는다). 업종(#16)은 이 목록을
+만든 뒤 채운다.
 """
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date
 from pathlib import Path
 from typing import Any
@@ -21,6 +23,7 @@ from typing import Any
 from krx_screener import universe
 from krx_screener.config import Config
 from krx_screener.externals import Externals
+from krx_screener.flow import fetch_flow
 from krx_screener.prices import PriceStore
 from krx_screener.repository import Item
 from krx_screener.screen import lookback_days, run_screen
@@ -38,6 +41,27 @@ def _to_item(seq: int, row: dict[str, Any]) -> Item:
         is_caution=bool(row["is_caution"]),
         is_foreign=bool(row["is_foreign"]),
     )
+
+
+def _apply_flow(
+    items: list[Item], externals: Externals, config: Config, as_of: date, workers: int, retry_wait: float
+) -> None:
+    """종목마다 수급 상태와 순매수 합계를 채운다. 읽지 못하면 ``unconfirmed`` 이고 합계는 빈 값이다.
+
+    설정의 ``flow.mode`` 와 상관없이 종목을 거르지 않는다 (스펙: 수급은 표시만 한다).
+    """
+    window = config.flow.window_days
+    with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
+        readings = list(
+            pool.map(
+                lambda it: fetch_flow(it.code, as_of, window, externals.trend, retry_wait=retry_wait),
+                items,
+            )
+        )
+    for item, reading in zip(items, readings, strict=True):
+        item.flow_status = reading.status
+        item.foreign_net_5d = reading.foreign
+        item.institution_net_5d = reading.institution
 
 
 def build_items(
@@ -62,4 +86,6 @@ def build_items(
     )
     result = run_screen(classified, config, as_of, store, workers=workers)
     rows = result.candidates.to_dict("records") if not result.candidates.empty else []
-    return [_to_item(seq, row) for seq, row in enumerate(rows, start=1)]
+    items = [_to_item(seq, row) for seq, row in enumerate(rows, start=1)]
+    _apply_flow(items, externals, config, as_of, workers, retry_wait)
+    return items

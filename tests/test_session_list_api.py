@@ -128,14 +128,14 @@ def test_a_high_rsi_does_not_remove_a_stock_but_the_value_is_kept(client, repo):
     assert overheated.rsi == 100.0  # 매일 오르는 종목: 과열이지만 목록에 있다
 
 
-def test_listed_values_are_stored_and_the_rest_waits_for_later_steps(client, repo):
+def test_listed_values_are_stored_and_the_later_steps_are_still_empty(client, repo):
     _, items = _create(client, repo)
     a = next(i for i in items if i.code == "000010")
     assert (a.name, a.market) == ("통과A", "KOSPI")
     assert a.close == int(passing_closes()[-1])
     assert isinstance(a.avg_trading_value, int) and a.avg_trading_value >= 1_000_000_000
     assert 0 <= a.rsi <= 100
-    # 아직 채워지지 않은 값: 수급(#15), 업종(#16), 처리 결과
+    # 이 세계의 수급 가짜는 이 종목을 모른다(빈 응답) → 미확인. 업종(#16)과 처리 결과는 아직 비어 있다
     assert (a.flow_status, a.foreign_net_5d, a.sector_name, a.description) == ("unconfirmed", None, "", "")
     assert (a.state, a.decision, a.score, a.report_id, a.rank) == ("pending", "", None, "", None)
 
