@@ -53,11 +53,24 @@ class FlowConfig:
     window_days: int
 
 
+# TradingAgents-KR API 가 받는 effort 값 (그쪽 요청 검증과 같은 목록)
+ANALYSIS_EFFORTS: tuple[str, ...] = ("low", "medium", "high", "xhigh", "max")
+
+
+@dataclass(frozen=True)
+class AnalysisConfig:
+    base_url: str
+    effort: str
+    timeout_seconds: int  # 종목 하나를 기다리는 최대 시간
+    poll_interval_seconds: float
+
+
 @dataclass(frozen=True)
 class Config:
     exclude: frozenset[str]
     filters: Filters
     flow: FlowConfig
+    analysis: AnalysisConfig
     raw: dict[str, Any]  # run.json 에 그대로 남기기 위한 원본
 
 
@@ -114,7 +127,13 @@ def parse_config(raw: Any) -> Config:
         rsi_period=_positive_int(f["rsi_period"], "filters.rsi_period"),
         rsi_max=float(rsi_max),
     )
-    return Config(exclude=exclude, filters=filters, flow=_parse_flow(raw.get("flow")), raw=raw)
+    return Config(
+        exclude=exclude,
+        filters=filters,
+        flow=_parse_flow(raw.get("flow")),
+        analysis=_parse_analysis(raw.get("analysis")),
+        raw=raw,
+    )
 
 
 def _parse_flow(raw: Any) -> FlowConfig:
@@ -135,6 +154,44 @@ def _parse_flow(raw: Any) -> FlowConfig:
             f"(수급 데이터는 최근 {MAX_FLOW_WINDOW_DAYS}거래일만 제공, 현재: {window})."
         )
     return FlowConfig(mode=mode, window_days=window)
+
+
+def _parse_analysis(raw: Any) -> AnalysisConfig:
+    """``analysis`` 항목은 생략할 수 있다 (로컬 서버, effort low, 종목당 30분 대기)."""
+    defaults = {
+        "base_url": "http://127.0.0.1:8000",
+        "effort": "low",
+        "timeout_seconds": 1800,
+        "poll_interval_seconds": 5,
+    }
+    if raw is None:
+        raw = {}
+    if not isinstance(raw, dict):
+        raise ConfigError("설정 'analysis' 는 키-값 구조여야 합니다.")
+    unknown = set(raw) - set(defaults)
+    if unknown:
+        raise ConfigError(f"설정 'analysis' 에 알 수 없는 항목이 있습니다: {sorted(unknown)}")
+    merged = {**defaults, **raw}
+
+    base_url = merged["base_url"]
+    if not isinstance(base_url, str) or not base_url.startswith(("http://", "https://")):
+        raise ConfigError(f"설정 'analysis.base_url' 은 http(s):// 로 시작해야 합니다 (현재: {base_url!r}).")
+    effort = merged["effort"]
+    if effort not in ANALYSIS_EFFORTS:
+        raise ConfigError(
+            f"설정 'analysis.effort' 는 {', '.join(ANALYSIS_EFFORTS)} 중 하나여야 합니다 (현재: {effort!r})."
+        )
+    poll = merged["poll_interval_seconds"]
+    if isinstance(poll, bool) or not isinstance(poll, (int, float)) or poll <= 0:
+        raise ConfigError(
+            f"설정 'analysis.poll_interval_seconds' 는 0 보다 큰 숫자여야 합니다 (현재: {poll!r})."
+        )
+    return AnalysisConfig(
+        base_url=base_url,
+        effort=effort,
+        timeout_seconds=_positive_int(merged["timeout_seconds"], "analysis.timeout_seconds"),
+        poll_interval_seconds=float(poll),
+    )
 
 
 def load_config(path: Path) -> Config:

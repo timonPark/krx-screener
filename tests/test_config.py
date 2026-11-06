@@ -59,6 +59,40 @@ def test_invalid_flow_config_is_rejected(flow, message):
         parse_config(raw)
 
 
+def test_analysis_section_defaults_and_overrides():
+    raw = _raw()
+    raw.pop("analysis", None)
+    cfg = parse_config(raw)
+    assert cfg.analysis.base_url == "http://127.0.0.1:8000"
+    assert (cfg.analysis.effort, cfg.analysis.timeout_seconds, cfg.analysis.poll_interval_seconds) == ("low", 1800, 5.0)
+
+    raw["analysis"] = {"effort": "high", "timeout_seconds": 60, "poll_interval_seconds": 0.5}
+    cfg = parse_config(raw)
+    assert (cfg.analysis.effort, cfg.analysis.timeout_seconds, cfg.analysis.poll_interval_seconds) == ("high", 60, 0.5)
+    assert cfg.analysis.base_url == "http://127.0.0.1:8000"  # 생략한 값은 기본값
+
+
+@pytest.mark.parametrize(
+    ("analysis", "message"),
+    [
+        ({"base_url": "127.0.0.1:8000"}, "base_url"),
+        ({"base_url": 8000}, "base_url"),
+        ({"effort": "turbo"}, "effort"),
+        ({"timeout_seconds": 0}, "timeout_seconds"),
+        ({"timeout_seconds": True}, "timeout_seconds"),
+        ({"poll_interval_seconds": 0}, "poll_interval_seconds"),
+        ({"poll_interval_seconds": True}, "poll_interval_seconds"),
+        ({"retries": 3}, "알 수 없는 항목"),
+        (["low"], "analysis"),
+    ],
+)
+def test_invalid_analysis_config_is_rejected(analysis, message):
+    raw = _raw()
+    raw["analysis"] = analysis
+    with pytest.raises(ConfigError, match=message):
+        parse_config(raw)
+
+
 def test_required_rows_covers_rsi_warmup():
     raw = _raw()
     raw["filters"]["price_above_ma"] = [5]

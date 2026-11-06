@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import csv
 import json
 from datetime import datetime
 from pathlib import Path
 
 from krx_screener import __version__
+from krx_screener.analysis import DONE, AnalysisOutcome, rating_label
 from krx_screener.config import Config
 from krx_screener.flow import FlowStats
 from krx_screener.screen import ScreenResult
@@ -74,3 +76,59 @@ def write_results(
         json.dumps(info, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
     )
     return out_dir
+
+
+ANALYSIS_FILE = "analysis.csv"
+_ANALYSIS_COLUMNS = [
+    "code", "name", "status", "decision", "decision_label", "is_target",
+    "run_id", "elapsed_seconds", "message",
+]
+
+
+def write_analysis(out_dir: Path, outcomes: list[AnalysisOutcome]) -> Path:
+    """3단계 결과를 쓴다 (종목마다 호출해 중간에 끊겨도 지금까지의 결과가 남게 한다)."""
+    out_dir.mkdir(parents=True, exist_ok=True)
+    path = out_dir / ANALYSIS_FILE
+    with path.open("w", encoding="utf-8-sig", newline="") as fh:
+        writer = csv.DictWriter(fh, fieldnames=_ANALYSIS_COLUMNS)
+        writer.writeheader()
+        for o in outcomes:
+            writer.writerow(
+                {
+                    "code": o.code,
+                    "name": o.name,
+                    "status": o.status,
+                    "decision": o.decision or "",
+                    "decision_label": rating_label(o.decision),
+                    "is_target": o.is_target,
+                    "run_id": o.run_id,
+                    "elapsed_seconds": round(o.elapsed_seconds, 1),
+                    "message": o.message,
+                }
+            )
+    return path
+
+
+def load_done_analysis(out_dir: Path) -> dict[str, AnalysisOutcome]:
+    """이전 실행에서 분석이 끝난 종목만 읽는다 (다시 보내 쿼터를 쓰지 않으려는 용도)."""
+    path = out_dir / ANALYSIS_FILE
+    if not path.exists():
+        return {}
+    done: dict[str, AnalysisOutcome] = {}
+    try:
+        with path.open(encoding="utf-8-sig", newline="") as fh:
+            for row in csv.DictReader(fh):
+                if row.get("status") != DONE or not row.get("decision"):
+                    continue
+                done[row["code"]] = AnalysisOutcome(
+                    code=row["code"],
+                    name=row.get("name", ""),
+                    status=DONE,
+                    decision=row["decision"],
+                    run_id=row.get("run_id", ""),
+                    elapsed_seconds=float(row.get("elapsed_seconds") or 0),
+                    message=row.get("message", ""),
+                )
+    except (OSError, KeyError, ValueError, csv.Error):
+        return {}  # 읽을 수 없는 파일은 이어받지 않는다 (처음부터)
+    return done
