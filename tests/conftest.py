@@ -68,3 +68,20 @@ def client(pg_conn, externals):
         )
     )
     return TestClient(app)
+
+
+@pytest.fixture
+def hold_lock(pg_conn):
+    """세션의 처리 잠금을 다른 연결로 쥐는 함수. 돌려주는 연결을 닫으면 잠금이 풀린다 (처리 중이던 연결이 끊긴 상황)."""
+    held = []
+
+    def hold(session_id):
+        conn = db.connect(os.environ[TEST_URL_ENV])
+        conn.autocommit = True
+        held.append(conn)
+        assert SessionRepository(conn).try_lock(session_id)
+        return conn
+
+    yield hold
+    for conn in held:
+        conn.close()

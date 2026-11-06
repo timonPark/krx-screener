@@ -153,6 +153,32 @@ class SessionRepository:
                 found[row["state"]] = row["n"]
         return found
 
+    # --- 세션 단위 처리 잠금 (#18) ---
+    #
+    # PostgreSQL 의 세션(연결) 단위 advisory lock 이다. 처리하는 연결이 잠금을 쥐고 있다가, 처리가 끝나서 연결을
+    # 닫거나 프로세스가 죽어 연결이 끊기면 DB 가 잠금을 푼다. 그래서 잠금이 남아서 영원히 막히는 일이 없다.
+    # 잠금을 쥔 연결은 처리가 끝날 때까지 닫지 말아야 한다 (트랜잭션 안에 두지 않도록 자동 커밋 연결로 쓴다).
+
+    @staticmethod
+    def _lock_key(session_id: uuid.UUID) -> int:
+        """세션 id 의 앞 8바이트로 만든 부호 있는 64비트 정수. 세션마다 다른 잠금이 된다."""
+        return int.from_bytes(session_id.bytes[:8], "big", signed=True)
+
+    def try_lock(self, session_id: uuid.UUID) -> bool:
+        """이 연결이 세션의 처리 잠금을 쥔다. 이미 다른 연결이 쥐고 있으면 기다리지 않고 False."""
+        row = self._conn.execute("SELECT pg_try_advisory_lock(%s)", (self._lock_key(session_id),)).fetchone()
+        return bool(row[0])
+
+    def is_locked(self, session_id: uuid.UUID) -> bool:
+        """어느 연결이든 세션의 처리 잠금을 쥐고 있는가 (잠금을 건드리지 않고 DB 의 잠금 목록만 본다)."""
+        key = self._lock_key(session_id)
+        row = self._conn.execute(
+            "SELECT EXISTS (SELECT 1 FROM pg_locks WHERE locktype = 'advisory' AND granted AND objsubid = 1 "
+            "AND classid::bigint = %s AND objid::bigint = %s)",
+            ((key >> 32) & 0xFFFFFFFF, key & 0xFFFFFFFF),  # 64비트 키는 위·아래 32비트로 나뉘어 기록된다
+        ).fetchone()
+        return bool(row[0])
+
     # --- 처리 상태와 결과 ---
 
     def _update_item(self, session_id: uuid.UUID, code: str, assignments: str, params: tuple) -> None:
