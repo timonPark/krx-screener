@@ -14,6 +14,8 @@ dependencies = [
     # TradingAgents-KR 도 FinanceDataReader 로 옮겼다 (#124).
     "finance-datareader>=0.9",
     "pyyaml>=6.0",
+    # 수급(네이버 증권) 조회에서 직접 사용. FinanceDataReader 가 끌고 오지만 명시한다.
+    "requests>=2.32",
     "rich>=14.0",
     "typer>=0.21",
 ]
