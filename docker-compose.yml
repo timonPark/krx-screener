@@ -1,0 +1,23 @@
+# 개발용 PostgreSQL. `docker compose up -d` 로 띄우고 `docker compose down` 으로 내린다.
+# 내 컴퓨터(127.0.0.1)에서만 접속되며, 비밀번호는 로컬 개발 전용이다.
+services:
+  postgres:
+    image: postgres:16
+    container_name: krx-screener-postgres
+    environment:
+      POSTGRES_USER: krx
+      POSTGRES_PASSWORD: krx
+      POSTGRES_DB: krx_screener
+    ports:
+      - "127.0.0.1:5433:5432"
+    volumes:
+      - krx_screener_pgdata:/var/lib/postgresql/data
+      - ./docker/postgres/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U krx -d krx_screener"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  krx_screener_pgdata:
