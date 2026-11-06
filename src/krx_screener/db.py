@@ -92,6 +92,23 @@ MIGRATIONS: list[tuple[int, str, str]] = [
         );
         """,
     ),
+    (
+        2,
+        "명령줄 대기열: 세션 출처(source), 종목 보관(archived), 분석 소요 시간(elapsed_seconds)",
+        """
+        -- 명령줄(run/analyze/list)의 분석 대기열은 기준일마다 source = 'cli' 세션 하나다 (웹 화면이 만든 세션과 섞이지 않는다)
+        ALTER TABLE sessions ADD COLUMN source text NOT NULL DEFAULT 'web'
+            CHECK (source IN ('web', 'cli'));
+        CREATE UNIQUE INDEX sessions_cli_as_of_idx ON sessions (as_of) WHERE source = 'cli';
+
+        -- 후보 목록에서 빠졌지만 끝난 분석(쿼터를 쓴 결과)은 지우지 않고 보관한다. 보관한 종목은 목록·개수·순위에 나오지 않는다
+        ALTER TABLE session_items ADD COLUMN archived boolean NOT NULL DEFAULT false;
+
+        -- 끝난 분석에 걸린 시간(초). 예상 시간을 재는 근거다
+        ALTER TABLE session_items ADD COLUMN elapsed_seconds double precision
+            CHECK (elapsed_seconds IS NULL OR elapsed_seconds >= 0);
+        """,
+    ),
 ]
 
 

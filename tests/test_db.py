@@ -112,7 +112,7 @@ def _item(conn, sid, seq=1, code="028050", **extra):
 
 @needs_db
 def test_init_creates_the_schema_on_an_empty_database(conn):
-    assert db.init_schema(conn) == [1]
+    assert db.init_schema(conn) == [1, 2]
     assert {"sessions", "session_items", "item_agent_ratings", "schema_migrations"} <= _tables(conn)
 
 
@@ -121,18 +121,18 @@ def test_init_is_safe_to_repeat(conn):
     db.init_schema(conn)
     assert db.init_schema(conn) == []
     versions = [r[0] for r in conn.execute("SELECT version FROM schema_migrations ORDER BY version")]
-    assert versions == [1]
+    assert versions == [1, 2]
 
 
 @needs_db
 def test_tables_hold_everything_the_api_contract_needs(conn):
     db.init_schema(conn)
-    assert _columns(conn, "sessions") == {"id", "as_of", "created_at", "ranked_at"}
+    assert _columns(conn, "sessions") == {"id", "as_of", "created_at", "ranked_at", "source"}
     assert {
         "session_id", "seq", "code", "name", "market", "close", "avg_trading_value", "rsi",
         "flow_status", "foreign_net_5d", "institution_net_5d", "sector_code", "sector_name",
         "description", "is_caution", "is_foreign", "state", "analyzed_at", "error_message",
-        "report_id", "decision", "score", "agents_rated", "agents_total", "rank",
+        "report_id", "decision", "score", "agents_rated", "agents_total", "rank", "archived", "elapsed_seconds",
     } == _columns(conn, "session_items")
     assert _columns(conn, "item_agent_ratings") == {"session_id", "code", "agent", "rating"}
 

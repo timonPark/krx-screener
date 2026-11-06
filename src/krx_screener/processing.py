@@ -28,6 +28,28 @@ from krx_screener.scoring import score_ratings
 logger = logging.getLogger(__name__)
 
 
+def finish_item(conn, repo, session_id: uuid.UUID, code: str, as_of: date, outcome, state_log_root) -> None:
+    """분석이 끝난 종목을 저장한다 (웹 처리와 명령줄 ``analyze`` 가 같이 쓴다).
+
+    분석이 끝난 직후에 에이전트별 등급을 읽는다 (같은 종목·기준일을 다시 분석하면 로그 파일이 덮어써진다). 못 읽은 에이전트는 빈다.
+    읽지 못해도 최종 등급은 저장한다. 완료 표시와 에이전트별 등급은 한 트랜잭션으로 함께 반영된다.
+    """
+    ratings = read_agent_ratings(state_log_root, code, as_of)
+    scored = score_ratings(ratings)  # 등급만으로 계산한다. 하나도 못 읽었으면 점수는 비운다
+    with conn.transaction():
+        repo.mark_done(
+            session_id,
+            code,
+            decision=outcome.decision or "",
+            score=scored.score,
+            agents_rated=scored.rated,
+            agents_total=scored.total,
+            report_id=outcome.report_id,  # 서버의 실행 번호(run_id)는 저장하지 않는다
+            elapsed_seconds=outcome.elapsed_seconds,
+        )
+        repo.save_agent_ratings(session_id, code, ratings)  # 옛 등급 행은 새 값으로 통째로 바뀐다
+
+
 def process_codes(deps, conn, session_id: uuid.UUID, as_of: date, codes: list[str]) -> None:
     """``codes`` 를 순서대로 분석한다. ``deps`` 는 ``api.Dependencies`` 다.
 
@@ -53,21 +75,7 @@ def process_codes(deps, conn, session_id: uuid.UUID, as_of: date, codes: list[st
                     cfg.poll_interval_seconds,
                 )
                 if outcome.status == DONE:
-                    # 분석이 끝난 직후에 읽는다: 같은 종목·기준일을 다시 분석하면 로그 파일이 덮어써진다.
-                    # 못 읽은 에이전트는 빈다. 읽지 못해도 분석 결과(등급)는 저장한다.
-                    ratings = read_agent_ratings(deps.externals.state_log_root, code, as_of)
-                    scored = score_ratings(ratings)  # 등급만으로 계산한다. 하나도 못 읽었으면 점수는 비운다
-                    with conn.transaction():  # 완료 표시와 에이전트별 등급이 함께 반영되거나 함께 안 된다
-                        repo.mark_done(
-                            session_id,
-                            code,
-                            decision=outcome.decision or "",
-                            score=scored.score,
-                            agents_rated=scored.rated,
-                            agents_total=scored.total,
-                            report_id=outcome.report_id,  # 서버의 실행 번호(run_id)는 저장하지 않는다
-                        )
-                        repo.save_agent_ratings(session_id, code, ratings)  # 옛 등급 행은 새 값으로 통째로 바뀐다
+                    finish_item(conn, repo, session_id, code, as_of, outcome, deps.externals.state_log_root)
                 else:
                     repo.mark_failed(session_id, code, outcome.message or "분석에 실패했습니다.")
             except NotFoundError:

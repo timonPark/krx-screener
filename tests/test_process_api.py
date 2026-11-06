@@ -428,3 +428,11 @@ def test_a_failed_stock_gets_no_score(client, repo):
     post(client, session.id, offset=0, count=1)
     item = repo.get_item(session.id, "000010")
     assert (item.state, item.score, item.agents_rated, item.agents_total) == ("failed", None, 0, 0)
+
+
+def test_the_time_each_analysis_took_is_saved_for_estimates(client, repo, pg_conn):
+    session = seed(repo)
+    post(client, session.id, offset=0, count=1)
+    row = pg_conn.execute("SELECT elapsed_seconds FROM session_items WHERE code = '000010'").fetchone()
+    assert row[0] is not None and row[0] >= 0  # 명령줄 dry-run 의 예상 시간이 웹에서 끝낸 분석도 근거로 쓴다
+    assert pg_conn.execute("SELECT elapsed_seconds FROM session_items WHERE code = '000020'").fetchone()[0] is None  # 처리 전

@@ -38,9 +38,33 @@ from krx_screener.prices import PriceFetchError, PriceStore
 def test_health_reports_the_schema_version_and_the_db_agrees(client, pg_conn):
     response = client.get("/api/health")
     assert response.status_code == 200
-    assert response.json() == {"status": "ok", "db": "ok", "schema_version": 1}
+    assert response.json() == {"status": "ok", "db": "ok", "schema_version": 2}
     # 응답이 말한 버전이 DB 에 실제로 있다
-    assert pg_conn.execute("SELECT max(version) FROM schema_migrations").fetchone()[0] == 1
+    assert pg_conn.execute("SELECT max(version) FROM schema_migrations").fetchone()[0] == 2
+
+
+def _downgrade_to_version_1(conn):
+    """스키마를 버전 1 로 되돌린다 (코드는 새 버전인데 DB 에 `db init` 을 안 한 상황)."""
+    conn.execute("DELETE FROM schema_migrations WHERE version = 2")
+    conn.execute("DROP INDEX sessions_cli_as_of_idx")
+    conn.execute("ALTER TABLE sessions DROP COLUMN source")
+    conn.execute("ALTER TABLE session_items DROP COLUMN archived, DROP COLUMN elapsed_seconds")
+
+
+STALE = "DB 스키마가 최신이 아닙니다. `python -m krx_screener.db init` 을 실행하세요."
+
+
+def test_health_with_an_old_schema_tells_to_run_init(client, pg_conn):
+    _downgrade_to_version_1(pg_conn)
+    response = client.get("/api/health")
+    assert (response.status_code, response.json()) == (503, {"detail": STALE})
+
+
+def test_every_address_with_an_old_schema_is_the_same_korean_503_not_a_server_error(client, pg_conn):
+    _downgrade_to_version_1(pg_conn)
+    for method, path in (("get", "/api/sessions"), ("get", "/api/sessions/latest")):
+        response = getattr(client, method)(path)
+        assert (response.status_code, response.json()) == (503, {"detail": STALE}), path
 
 
 def test_health_without_a_schema_is_a_korean_503(client, pg_conn):

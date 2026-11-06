@@ -30,7 +30,8 @@ class Session:
     as_of: date
     created_at: datetime
     ranked_at: datetime | None
-    total: int  # 세션 안의 종목 수
+    total: int  # 세션 안의 종목 수 (보관한 종목은 세지 않는다)
+    source: str = "web"  # web = 웹 화면이 만든 세션, cli = 명령줄 분석 대기열
 
 
 @dataclass(frozen=True)
@@ -80,8 +81,8 @@ _LISTED = (
 )
 _ITEM_COLUMNS = ", ".join(f.name for f in fields(Item))
 _SESSION_SQL = (
-    "SELECT s.id, s.as_of, s.created_at, s.ranked_at, "
-    "(SELECT count(*) FROM session_items i WHERE i.session_id = s.id) AS total "
+    "SELECT s.id, s.as_of, s.created_at, s.ranked_at, s.source, "
+    "(SELECT count(*) FROM session_items i WHERE i.session_id = s.id AND NOT i.archived) AS total "
     "FROM sessions s"
 )
 
@@ -134,10 +135,10 @@ class SessionRepository:
             raise NotFoundError("세션을 찾지 못했습니다.") from None
 
     def items(self, session_id: uuid.UUID) -> list[Item]:
-        """세션 전체 종목을 순번 순으로."""
+        """세션 전체 종목을 순번 순으로 (보관한 종목은 뺀다)."""
         with self._cursor() as cur:
             rows = cur.execute(
-                f"SELECT {_ITEM_COLUMNS} FROM session_items WHERE session_id = %s ORDER BY seq",
+                f"SELECT {_ITEM_COLUMNS} FROM session_items WHERE session_id = %s AND NOT archived ORDER BY seq",
                 (session_id,),
             ).fetchall()
         return [Item(**r) for r in rows]
@@ -155,7 +156,7 @@ class SessionRepository:
         found = dict.fromkeys(STATES, 0)
         with self._cursor() as cur:
             for row in cur.execute(
-                "SELECT state, count(*) AS n FROM session_items WHERE session_id = %s GROUP BY state",
+                "SELECT state, count(*) AS n FROM session_items WHERE session_id = %s AND NOT archived GROUP BY state",
                 (session_id,),
             ):
                 found[row["state"]] = row["n"]
@@ -211,14 +212,16 @@ class SessionRepository:
         agents_total: int,
         report_id: str = "",
         analyzed_at: datetime | None = None,
+        elapsed_seconds: float | None = None,
     ) -> None:
-        """분석이 끝난 결과를 적는다. 이전 실패 사유는 지운다."""
+        """분석이 끝난 결과를 적는다. 이전 실패 사유는 지운다. 걸린 시간을 주지 않으면 이전 값을 둔다."""
         self._update_item(
             session_id,
             code,
             "state = 'done', error_message = '', decision = %s, score = %s, agents_rated = %s, "
-            "agents_total = %s, report_id = %s, analyzed_at = COALESCE(%s, now())",
-            (decision, score, agents_rated, agents_total, report_id, analyzed_at),
+            "agents_total = %s, report_id = %s, analyzed_at = COALESCE(%s, now()), "
+            "elapsed_seconds = COALESCE(%s, elapsed_seconds)",
+            (decision, score, agents_rated, agents_total, report_id, analyzed_at, elapsed_seconds),
         )
 
     def mark_failed(
@@ -252,12 +255,13 @@ class SessionRepository:
             ranked = self._conn.execute(
                 "UPDATE session_items i SET rank = r.rn FROM ("
                 " SELECT seq, row_number() OVER (ORDER BY score DESC, seq ASC) AS rn FROM session_items"
-                " WHERE session_id = %s AND state = 'done' AND score IS NOT NULL) r"
+                " WHERE session_id = %s AND NOT archived AND state = 'done' AND score IS NOT NULL) r"
                 " WHERE i.session_id = %s AND i.seq = r.seq",
                 (session_id, session_id),
             ).rowcount
             unscored = self._conn.execute(
-                "SELECT count(*) FROM session_items WHERE session_id = %s AND state = 'done' AND score IS NULL",
+                "SELECT count(*) FROM session_items "
+                "WHERE session_id = %s AND NOT archived AND state = 'done' AND score IS NULL",
                 (session_id,),
             ).fetchone()[0]
             self._conn.execute("UPDATE sessions SET ranked_at = now() WHERE id = %s", (session_id,))
@@ -275,7 +279,7 @@ class SessionRepository:
         row = self._conn.execute(
             "SELECT EXISTS ("
             " SELECT 1 FROM session_items i JOIN sessions s ON s.id = i.session_id"
-            " WHERE i.session_id = %s AND s.ranked_at IS NOT NULL AND i.analyzed_at > s.ranked_at"
+            " WHERE i.session_id = %s AND NOT i.archived AND s.ranked_at IS NOT NULL AND i.analyzed_at > s.ranked_at"
             " AND (i.rank IS NOT NULL OR (i.state = 'done' AND i.score IS NOT NULL)))",
             (session_id,),
         ).fetchone()
