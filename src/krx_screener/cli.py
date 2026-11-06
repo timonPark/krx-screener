@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ipaddress
 from datetime import date, datetime
 from pathlib import Path
 from typing import Annotated
@@ -13,6 +14,7 @@ from rich.console import Console
 from rich.progress import BarColumn, Progress, TextColumn, TimeElapsedColumn
 from rich.table import Table
 
+from krx_screener import server as web
 from krx_screener import universe as uni
 from krx_screener.analysis import (
     DONE,
@@ -623,3 +625,57 @@ def _print_dry_run(store: QueueStore, plan: list[tuple[QueueRow, str]]) -> None:
     elif queue:
         console.print("예상 소요: 알 수 없음 (끝난 분석이 없어 시간을 잴 수 없음)")
     console.print("[dim]--dry-run: 서버에 연결하지 않았고 쿼터를 쓰지 않았습니다.[/dim]")
+
+
+def _is_local_host(host: str) -> bool:
+    """이 컴퓨터에서만 닿는 주소인가 (localhost, 127.x, ::1)."""
+    if host == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+@app.command()
+def serve(
+    host: Annotated[str, typer.Option("--host", help="열 주소 (기본: 이 컴퓨터에서만)")] = "127.0.0.1",
+    port: Annotated[int, typer.Option("--port", min=1, max=65535, help="열 포트")] = web.DEFAULT_PORT,
+    allow_remote: Annotated[
+        bool, typer.Option("--allow-remote", help="이 컴퓨터 밖에서도 접속하게 연다 (로그인이 없어 권하지 않는다)")
+    ] = False,
+    config_path: Annotated[Path, typer.Option("--config", help="설정 파일")] = Path("config.yaml"),
+    cache: Annotated[Path, typer.Option("--cache", help="시세 캐시 폴더")] = Path("cache"),
+    frontend: Annotated[Path | None, typer.Option("--frontend", help="화면 폴더 (기본: 저장소의 frontend/)")] = None,
+) -> None:
+    """화면과 웹 API 를 한 주소에서 연다 (#26).
+
+    DB 는 환경변수 KRX_SCREENER_DATABASE_URL, 분석 서버는 config.yaml 의 analysis.base_url 이다.
+    DB 가 아직 없어도 서버는 뜨고 화면이 한국어 오류로 알려준다 (스키마: python -m krx_screener.db init).
+    """
+    if not _is_local_host(host) and not allow_remote:
+        console.print(
+            f"[red]{host} 로 열면 같은 네트워크의 누구나 접속해 분석(쿼터 사용)을 시작할 수 있습니다. "
+            "이 서버에는 로그인이 없습니다.[/red]\n"
+            "이 컴퓨터에서만 쓰려면 --host 를 빼고, 정말 열려면 --allow-remote 를 붙이세요."
+        )
+        raise typer.Exit(2)
+    screen = frontend if frontend is not None else web.default_frontend_dir()
+    if not (screen / "index.html").is_file():
+        console.print(f"[red]화면 폴더를 찾지 못했습니다: {screen} (index.html 이 있는 폴더여야 합니다)[/red]")
+        raise typer.Exit(1)
+    try:
+        deps = web.build_dependencies(config_path, cache_dir=cache, frontend_dir=screen)
+    except ConfigError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1) from None
+
+    import uvicorn
+
+    from krx_screener.api import create_app
+
+    shown = f"[{host}]" if ":" in host else host
+    console.print(f"화면: http://{shown}:{port}/   (예시 데이터: http://{shown}:{port}/?mock=1)")
+    if allow_remote and not _is_local_host(host):
+        console.print("[yellow]주의: 이 서버에는 로그인이 없습니다. 접속하는 누구나 분석을 시작할 수 있습니다.[/yellow]")
+    uvicorn.run(create_app(deps), host=host, port=port, log_level="info")

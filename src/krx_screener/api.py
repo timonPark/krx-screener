@@ -5,6 +5,8 @@
 
 - DB 연결과 외부 경계는 ``Dependencies`` 로 주입한다. 테스트는 이 둘만 바꿔 끼운다.
 - 모든 오류 응답은 ``{"detail": "한국어 메시지"}`` 모양이다.
+- ``frontend_dir`` 이 있으면 그 폴더(화면)를 ``/`` 에서 정적 파일로 같이 서빙한다 (#26). 화면의 ``apiBase`` 는 빈 값이라
+  같은 주소의 ``/api/...`` 를 부르므로 CORS 가 필요 없다. 화면은 API 라우터 **뒤에** 마운트해서 ``/api`` 를 가리지 않는다.
 """
 
 from __future__ import annotations
@@ -19,6 +21,7 @@ import psycopg
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 
 from krx_screener.analysis import AnalysisError
 from krx_screener.asof import AsOfError, AsOfUnavailableError
@@ -43,6 +46,7 @@ class Dependencies:
     cache_dir: Path | None = None  # 시세 캐시 폴더. None 이면 캐시하지 않는다
     retry_wait: float = 0.5  # 외부 시세 조회를 재시도하기 전에 기다리는 초
     workers: int = 8  # 종목 시세를 동시에 조회하는 수
+    frontend_dir: Path | None = None  # 화면 폴더. None 이면 API 만 서빙한다
 
 
 def create_app(deps: Dependencies) -> FastAPI:
@@ -104,4 +108,7 @@ def create_app(deps: Dependencies) -> FastAPI:
         return {"status": "ok", "db": "ok", "schema_version": version}
 
     app.include_router(sessions_router)
+    if deps.frontend_dir is not None:
+        # 마지막에 마운트한다: 위의 /api 주소가 먼저 맞고, 나머지 주소는 화면 파일로 간다
+        app.mount("/", StaticFiles(directory=deps.frontend_dir, html=True), name="frontend")
     return app

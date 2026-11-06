@@ -16,15 +16,22 @@
 
 ES 모듈이라 `file://` 로 열면 막힌다. 아무 정적 서버로 연다.
 
+**백엔드와 함께 (권장)** — 백엔드가 이 폴더를 같이 서빙한다 (`apiBase: ''` 그대로, 같은 주소의 `/api` 를 불러서 CORS 불필요).
+
 ```bash
-cd frontend
-python3 -m http.server 8080
-# 예시 데이터: http://localhost:8080/?mock=1
-# 실제 백엔드: http://localhost:8080/  (config.js 의 apiBase 를 백엔드 주소로)
+.venv/bin/krx-screener serve        # 저장소 루트에서. DB 설정은 README 의 "웹 화면" 참고
+# 실제 데이터: http://127.0.0.1:8100/
+# 예시 데이터: http://127.0.0.1:8100/?mock=1
 ```
 
-백엔드 웹 서버가 생기면 이 폴더를 정적 파일로 같이 서빙하는 것을 권한다 (`apiBase: ''` 그대로, CORS 불필요).
-다른 포트에서 따로 띄우면 백엔드에 CORS 허용이 필요하다.
+**화면만 (백엔드 없이)** — 아무 정적 서버로 연다. 예시 데이터(`?mock=1`)만 쓸 수 있다.
+
+```bash
+cd frontend && python3 -m http.server 8080     # http://localhost:8080/?mock=1
+```
+
+다른 포트에서 화면만 따로 띄우고 실제 백엔드를 부르려면 `config.js` 의 `apiBase` 를 백엔드 주소로 바꾸고 백엔드에 CORS 허용이 필요하다
+(백엔드는 지금 CORS 를 허용하지 않는다).
 
 ## API 계약 (화면이 기대하는 모양)
 
