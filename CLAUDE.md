@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-krx-screener 작업 지침서. 코스피·코스닥 전종목에서 규칙만으로 분석 후보를 고르는 Python CLI.
+krx-screener 작업 지침서. 코스피·코스닥 전종목에서 규칙만으로 분석 후보를 고르고, 나눠서 분석해 평가점수로 순위를 매기는 Python 도구 (CLI + 웹 API·화면).
 `/Users/2309-n0018/Project/TradingAgents-KR` 의 작업 방식을 참고하되 규모에 맞게 줄였다.
 설계 배경은 `TradingAgents-KR/docs/screener-project-proposal.md`.
 
@@ -9,8 +9,11 @@ krx-screener 작업 지침서. 코스피·코스닥 전종목에서 규칙만으
 - 1단계: 시세만으로 계산하는 규칙 필터 (모델 미사용, 계정 불필요). 기준은 `config.yaml`.
 - 1.5단계: 1단계 통과 후보에만 수급 조회 (네이버 증권, 로그인 불필요). **표시만** 하고 후보를
   거르지 않는다 (`config.yaml` 의 `flow.mode`). 읽지 못하면 탈락시키지 않고 [[수급 미확인]].
-- 3단계: 후보를 TradingAgents-KR 로컬 서버 API(`POST /api/runs`)로 보내 등급을 모은다 (`analyze`).
+- 3단계: 후보를 TradingAgents-KR 로컬 서버 API(`POST /api/runs`)로 보내 등급을 모은다 (명령줄 `analyze`, 웹 화면의 "처리 시작").
   **쿼터를 쓰므로** `--count` 필수(`--offset` 으로 구간 지정), 실행 전 확인, 한 번에 하나씩, 끝난 종목은 재전송 안 함.
+  끝난 직후 서버의 분석 상태 로그에서 에이전트별 등급을 읽어 **평가점수**(등급을 낸 에이전트의 평균)를 저장한다.
+- 웹: 세션 기반 API(`/api/sessions`: 목록 뽑기 → 나눠서 처리 → 조회 → 정리)와 화면(`frontend/`)을 `krx-screener serve` 가 한 주소에서 연다.
+  같은 세션은 동시에 처리하지 않는다(세션 잠금). 로그인이 없어 기본은 이 컴퓨터(`127.0.0.1`)에서만 연다. 설계는 `docs/backend-design.md`.
 - 2단계(가벼운 모델)는 범위 밖 (후보가 너무 많을 때만).
 - 1단계 결과는 `results/YYYY-MM-DD/` 의 `candidates.csv` + `run.json` (파일).
 - 3단계 분석 상태는 DB 대기열에 둔다. 저장소는 PostgreSQL (`docs/adr/0001-postgres-analysis-queue.md`,
@@ -18,7 +21,7 @@ krx-screener 작업 지침서. 코스피·코스닥 전종목에서 규칙만으
   (`src/krx_screener/analysis_queue.py`, 웹 화면과 같은 저장소).
   `analysis.csv` 는 DB 에서 내보낸 사본이다. `--redo` 가 실패해도 기존 등급은 지우지 않는다.
 - 실행은 수동. `--date` 기본값은 직전 영업일, 시세는 날짜별로 캐시한다.
-- 용어는 `GLOSSARY.md`. 특히 **후보** 는 **등급** 이 아니다.
+- 용어는 `GLOSSARY.md`. 특히 **후보** 는 **등급** 이 아니고, **평가점수** 는 **등급** 이 아니다.
 
 ## 작업 규칙
 
@@ -45,6 +48,8 @@ krx-screener 작업 지침서. 코스피·코스닥 전종목에서 규칙만으
   있다. 코드는 문자열로 다루고 `\d{6}` 을 가정하지 않는다.
 - TradingAgents-KR 는 HTTP API 로만 연결한다 (코드 의존 금지). 서버에는 취소 API 가 없고 `run_id`
   상태는 서버 메모리에만 있다. 서버는 숫자 6자리 종목코드만 받아서 영숫자 코드는 보내지 않는다.
+  `run_id` 는 저장·노출하지 않고, 보고서는 `report_id`(서버가 이벤트로 알려 준다)로 가리킨다.
+  에이전트별 등급은 서버와 **같은 컴퓨터**의 분석 상태 로그 파일에서 읽는다 (API 로는 받을 수 없다).
 - 데이터가 없다는 이유로 후보를 버리지 않는다 (수급 미확인으로 표시하고 통과).
 - 필터 임계값은 백테스트로 정한 값이 아니다. 후보 수가 감당 가능한지만 보고 조정한다.
 - 수급은 네이버 증권 비공식 경로(최근 10거래일, 수량(주) 기준)만 쓴다. KRX 로그인은 만들지
@@ -54,4 +59,6 @@ krx-screener 작업 지침서. 코스피·코스닥 전종목에서 규칙만으
 
 ## 참조
 
-- `GLOSSARY.md`, `docs/adr/`, `work_history/`, `config.yaml`
+- `README.md` (실행 방법), `GLOSSARY.md`, `config.yaml`, `work_history/`
+- `docs/backend-design.md` (백엔드 설계), `docs/frontend-spec.md` (화면 명세), `docs/api-testing.md` (테스트 방법), `docs/adr/` (결정 기록)
+- `frontend/README.md` (화면 파일)

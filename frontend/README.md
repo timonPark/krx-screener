@@ -1,6 +1,6 @@
 # krx-screener 화면 (frontend)
 
-`docs/backend-design.md` 11장의 화면. 빌드 없는 정적 파일(HTML·CSS·JS 모듈)이다.
+`docs/backend-design.md` 11장의 화면. 동작 명세는 [docs/frontend-spec.md](../docs/frontend-spec.md), 실행 방법은 [README](../README.md) 를 본다. 빌드 없는 정적 파일(HTML·CSS·JS 모듈)이다.
 디자인 원본은 Claude 디자인 캔버스 "KRX Screener 화면 디자인".
 
 | 파일 | 내용 |
