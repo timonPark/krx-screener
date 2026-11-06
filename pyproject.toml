@@ -1,0 +1,56 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "krx-screener"
+dynamic = ["version"]
+description = "코스피·코스닥 전종목에서 분석해 볼 만한 후보를 규칙으로 고르는 스크리너 (모델 미사용)"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "pandas>=3.0",
+    # 종목 목록(전종목 리스팅). pykrx 의 목록 함수는 KRX 사이트 변경으로 깨져
+    # TradingAgents-KR 도 FinanceDataReader 로 옮겼다 (#124).
+    "finance-datareader>=0.9",
+    "pyyaml>=6.0",
+    "rich>=14.0",
+    "typer>=0.21",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.16",
+]
+
+[project.scripts]
+krx-screener = "krx_screener.cli:app"
+
+[tool.setuptools.dynamic]
+version = {attr = "krx_screener.__version__"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra --strict-markers -m \"not integration\""
+markers = [
+    "integration: 외부 서비스(네트워크)가 필요한 테스트. -m integration 으로만 실행",
+]
+filterwarnings = [
+    "ignore::DeprecationWarning",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+extend-exclude = ["results", "cache"]
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "I", "B", "UP", "C4", "SIM"]
+ignore = ["E501"]
+
+[tool.ruff.lint.per-file-ignores]
+"**/__init__.py" = ["F401"]

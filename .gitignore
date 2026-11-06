@@ -1,0 +1,13 @@
+.venv/
+__pycache__/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.DS_Store
+
+# 비밀값 — .env.example 만 커밋
+.env
+
+# 실행 산출물과 시세 캐시 (날짜별로 다시 만들 수 있음)
+results/
+cache/
