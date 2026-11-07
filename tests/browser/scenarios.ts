@@ -1,34 +1,69 @@
-// 브라우저 시나리오 (#58). 사용: node scenarios.mjs <시나리오> <화면 주소> <Chrome 포트> <프로필 폴더>
+// 브라우저 시나리오 (#58). 사용: node scenarios.ts <시나리오> <화면 주소> <Chrome 포트> <프로필 폴더>
 // 화면에서 본 사실을 JSON 한 줄로 내고, 판정은 pytest(tests/test_browser_screen.py)가 한다.
-import { launchChrome, Page, sleep } from './cdp.mjs';
+// Node 가 타입을 지우고 바로 실행한다 (22.18 이상). 타입 검사는 `npm run typecheck`.
+import type { ChildProcess } from 'node:child_process';
+import { launchChrome, Page, sleep } from './cdp.ts';
 
-const [name, base, port, profile] = process.argv.slice(2);
-const ctl = (values) => fetch(new URL('__ctl', base), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(values) });
+const [name, base, port, profile]: string[] = process.argv.slice(2);
+
+// 테스트 서버(tests/browser_harness.py)의 가짜를 실행 중에 조작한다
+const ctl = (values: Record<string, unknown>): Promise<Response> =>
+  fetch(new URL('__ctl', base), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(values) });
+
+// 화면에서 본 사실. 판정은 pytest 가 한다
+type Facts = Record<string, unknown>;
+
+interface SessionOption {
+  value: string;
+  label: string;
+}
+
+interface Row {
+  seq: string;
+  name: string;
+  status: string;
+  grade: string;
+  score: string;
+  rank: string;
+}
 
 // ---- 화면을 읽고 조작하는 도구 ----
-const make = (page) => {
-  const text = (id) => page.eval(`document.getElementById('${id}').textContent.trim().replace(/\\s+/g, ' ')`);
-  const shown = (id) => page.eval(`!document.getElementById('${id}').hidden`);
-  return {
-    text,
-    shown,
-    set: (id, v) => page.eval(`(() => { const e = document.getElementById('${id}'); e.value = '${v}'; e.dispatchEvent(new Event('input', { bubbles: true })); })()`),
-    click: (id) => page.eval(`document.getElementById('${id}').click()`),
-    disabled: (id) => page.eval(`document.getElementById('${id}').disabled`),
-    pickSession: (value) => page.eval(`(() => { const e = document.getElementById('session'); e.value = '${value}'; e.dispatchEvent(new Event('change', { bubbles: true })); })()`),
-    sessions: () => page.eval(`[...document.getElementById('session').options].map((o) => ({ value: o.value, label: o.textContent.trim().replace(/\\s+/g, ' ') }))`),
-    error: () => page.eval(`(() => { const n = document.getElementById('error-notice'); return n.hidden ? null : n.textContent.trim(); })()`),
-    rows: () => page.eval(`[...document.querySelectorAll('#rows tr')].map((tr) => { const td = tr.querySelectorAll('td'); const c = (i) => td[i].textContent.trim().replace(/\\s+/g, ' ');
+interface Ui {
+  text(id: string): Promise<string>;
+  shown(id: string): Promise<boolean>;
+  set(id: string, v: string | number): Promise<void>;
+  click(id: string): Promise<void>;
+  disabled(id: string): Promise<boolean>;
+  pickSession(value: string): Promise<void>;
+  sessions(): Promise<SessionOption[]>;
+  error(): Promise<string | null>;
+  rows(): Promise<Row[]>;
+  idle(ms?: number): Promise<void>;
+  api(path: string, opts?: Record<string, unknown>): Promise<[number, unknown]>;
+}
+
+const make = (page: Page): Ui => ({
+  text: (id: string): Promise<string> => page.eval<string>(`document.getElementById('${id}').textContent.trim().replace(/\\s+/g, ' ')`),
+  shown: (id: string): Promise<boolean> => page.eval<boolean>(`!document.getElementById('${id}').hidden`),
+  set: (id: string, v: string | number): Promise<void> => page.eval<void>(`(() => { const e = document.getElementById('${id}'); e.value = '${v}'; e.dispatchEvent(new Event('input', { bubbles: true })); })()`),
+  click: (id: string): Promise<void> => page.eval<void>(`document.getElementById('${id}').click()`),
+  disabled: (id: string): Promise<boolean> => page.eval<boolean>(`document.getElementById('${id}').disabled`),
+  pickSession: (value: string): Promise<void> => page.eval<void>(`(() => { const e = document.getElementById('session'); e.value = '${value}'; e.dispatchEvent(new Event('change', { bubbles: true })); })()`),
+  sessions: (): Promise<SessionOption[]> => page.eval<SessionOption[]>(`[...document.getElementById('session').options].map((o) => ({ value: o.value, label: o.textContent.trim().replace(/\\s+/g, ' ') }))`),
+  error: (): Promise<string | null> => page.eval<string | null>(`(() => { const n = document.getElementById('error-notice'); return n.hidden ? null : n.textContent.trim(); })()`),
+  rows: (): Promise<Row[]> => page.eval<Row[]>(`[...document.querySelectorAll('#rows tr')].map((tr) => { const td = tr.querySelectorAll('td'); const c = (i) => td[i].textContent.trim().replace(/\\s+/g, ' ');
       return { seq: c(0), name: td[1].querySelector('.name').childNodes[0].textContent.trim(), status: td[7].querySelector('.status').textContent.trim(), grade: c(8), score: c(9), rank: c(10) }; })`),
-    idle: (ms = 60000) => page.waitFor(`!document.getElementById('poll-dot').classList.contains('live') && document.getElementById('p-running').textContent === '0'`, ms, 100),
-    api: (path, opts) => page.eval(`fetch('${path}', ${JSON.stringify(opts || {})}).then(async (r) => [r.status, await r.json()])`),
-  };
-};
+  idle: (ms: number = 60000): Promise<void> => page.waitFor(`!document.getElementById('poll-dot').classList.contains('live') && document.getElementById('p-running').textContent === '0'`, ms, 100),
+  api: (path: string, opts: Record<string, unknown> = {}): Promise<[number, unknown]> =>
+    page.eval<[number, unknown]>(`fetch('${path}', ${JSON.stringify(opts)}).then(async (r) => [r.status, await r.json()])`),
+});
+
+type Scenario = (page: Page, ui: Ui, out: Facts) => Promise<void>;
 
 // ---- 시나리오 ----
-const scenarios = {
+const scenarios: Record<string, Scenario> = {
   // 새 목록: 만드는 중 진행 → 같은 기준일 409 → 끝나면 표와 조건 문구
-  async newList(page, ui, out) {
+  async newList(page: Page, ui: Ui, out: Facts): Promise<void> {
     await page.goto(base);
     out.firstSession = (await ui.sessions())[0].label;                      // 세션이 없을 때의 안내
     await ctl({ build_gate: 3 });                                           // 시세를 3개까지만 받고 멈춘다
@@ -36,7 +71,7 @@ const scenarios = {
     await ui.click('new-list-btn');
     await page.waitFor(`document.getElementById('build-detail').textContent.includes('3 / 8')`, 20000);
     out.building = {
-      title: await ui.text('build-title'), detail: await ui.text('build-detail'), bar: await page.eval(`document.getElementById('build-bar').style.width`),
+      title: await ui.text('build-title'), detail: await ui.text('build-detail'), bar: await page.eval<string>(`document.getElementById('build-bar').style.width`),
       total: await ui.text('m-total'), session: (await ui.sessions())[0].label, poll: await ui.text('poll-text'),
       startDisabled: await ui.disabled('start-btn'), startHint: await ui.text('start-hint'), organizeDisabled: await ui.disabled('organize-btn'),
       rows: (await ui.rows()).length,
@@ -57,7 +92,7 @@ const scenarios = {
   },
 
   // 처리: 구간 처리 중 갱신 → 정리 막힘 → 모두 처리 → 정리 → 재분석 뒤 낡음 → 다시 정리
-  async processAndOrganize(page, ui, out) {
+  async processAndOrganize(page: Page, ui: Ui, out: Facts): Promise<void> {
     await ctl({ errors: ['030530'], polls: 3 });                            // 4번째 종목은 실패한다
     await page.goto(base);
     await ui.set('asof', '2026-11-05');
@@ -68,7 +103,7 @@ const scenarios = {
     await page.waitFor(`document.getElementById('p-running').textContent !== '0'`, 15000);   // 새로고침 없이 처리 중이 보인다
     out.running = { poll: await ui.text('poll-text'), startDisabled: await ui.disabled('start-btn'), offsetDisabled: await ui.disabled('offset') };
     await ui.idle();
-    out.afterFirst = { progress: await ui.text('p-processed'), done: await ui.text('p-done'), failed: await ui.text('p-failed'), pending: await ui.text('p-pending'), rows: (await ui.rows()).map((r) => `${r.seq}:${r.status}`) };
+    out.afterFirst = { progress: await ui.text('p-processed'), done: await ui.text('p-done'), failed: await ui.text('p-failed'), pending: await ui.text('p-pending'), rows: (await ui.rows()).map((r: Row): string => `${r.seq}:${r.status}`) };
     out.gated = { disabled: await ui.disabled('organize-btn'), hint: await ui.text('organize-hint') };   // 남은 종목이 있으면 정리가 막힌다
     out.gatedApi = (await ui.api('/api/sessions/latest/organize', { method: 'POST' }))[0];
     await ui.set('offset', 4); await ui.set('count', 100);
@@ -78,7 +113,7 @@ const scenarios = {
     out.allProcessed = { done: await ui.text('p-done'), failed: await ui.text('p-failed'), organizeDisabled: await ui.disabled('organize-btn') };
     await ui.click('organize-btn');
     await page.waitFor(`document.getElementById('sort').value === 'rank'`, 15000);
-    out.organized = { sort: await page.eval(`document.getElementById('sort').value`), stale: await ui.shown('stale-notice'), rows: (await ui.rows()).map((r) => `${r.seq}:${r.rank}`) };
+    out.organized = { sort: await page.eval<string>(`document.getElementById('sort').value`), stale: await ui.shown('stale-notice'), rows: (await ui.rows()).map((r: Row): string => `${r.seq}:${r.rank}`) };
     await ctl({ errors: [] });                                              // 실패했던 종목이 이번에는 성공한다
     await ui.set('offset', 3); await ui.set('count', 1);
     await ui.click('start-btn');
@@ -88,17 +123,17 @@ const scenarios = {
     out.stale = { shown: await ui.shown('stale-notice'), organizeHint: await ui.text('organize-hint') };
     await ui.click('organize-btn');
     await page.waitFor(`document.getElementById('stale-notice').hidden`, 15000);
-    out.restored = { stale: await ui.shown('stale-notice'), rows: (await ui.rows()).map((r) => `${r.seq}:${r.rank}`) };
+    out.restored = { stale: await ui.shown('stale-notice'), rows: (await ui.rows()).map((r: Row): string => `${r.seq}:${r.rank}`) };
   },
 
   // 오류 알림: 동작 오류는 갱신이 성공해도 남고, 조회 오류는 다음 조회가 성공하면 사라진다
-  async errors(page, ui, out) {
+  async errors(page: Page, ui: Ui, out: Facts): Promise<void> {
     await ctl({ polls: 3 });
     await page.goto(base);
     await ui.set('asof', '2026-11-05');
     await ui.click('new-list-btn');
     await page.waitFor(`document.getElementById('build-card').hidden && document.getElementById('m-total').textContent === '8'`, 30000);
-    const settle = async () => { await sleep(1500); return ui.error(); };       // 갱신(0.4초 간격)이 여러 번 돈 뒤에도 남아 있는가
+    const settle = async (): Promise<string | null> => { await sleep(1500); return ui.error(); };       // 갱신(0.4초 간격)이 여러 번 돈 뒤에도 남아 있는가
 
     // (a) 다른 곳이 먼저 처리를 시작한 세션을 이 화면에서 처리 시작 → 409
     await ui.set('offset', 0); await ui.set('count', 3);
@@ -130,7 +165,7 @@ const scenarios = {
 
     // (d) DB 가 꺼진 동안의 조회 실패는 계속 보이고, 복구 뒤 조회가 성공하면 사라진다
     await ctl({ db_down: true });
-    const current = await page.eval(`document.getElementById('session').value`);
+    const current: string = await page.eval<string>(`document.getElementById('session').value`);
     await ui.pickSession(current);                                         // 쉬는 중에는 주기 갱신이 없으니 세션을 다시 골라 조회를 부른다
     await page.waitFor(`!document.getElementById('error-notice').hidden && document.getElementById('error-notice').textContent.includes('PostgreSQL')`, 15000);
     out.dbDown = { first: await ui.error(), later: await settle() };
@@ -141,7 +176,7 @@ const scenarios = {
   },
 
   // 만들지 못한 목록: 이유를 보이고 처리·정리는 막힌다
-  async failedList(page, ui, out) {
+  async failedList(page: Page, ui: Ui, out: Facts): Promise<void> {
     await page.goto(base);
     out.card = {
       shown: await ui.shown('build-card'), title: await ui.text('build-title'), detail: await ui.text('build-detail'),
@@ -151,7 +186,7 @@ const scenarios = {
   },
 
   // 예시 모드(?mock=1): 백엔드 없이 화면이 돌고 새 목록이 끝까지 만들어진다
-  async mock(page, ui, out) {
+  async mock(page: Page, ui: Ui, out: Facts): Promise<void> {
     await page.goto(new URL('?mock=1', base).href);
     out.tag = await ui.shown('mock-tag');
     out.first = { total: await ui.text('m-total'), rows: (await ui.rows()).length, filter: await ui.text('m-filter') };
@@ -164,20 +199,25 @@ const scenarios = {
   },
 };
 
-const chrome = await launchChrome(Number(port), profile);
-const out = {};
-let page;
+const chrome: ChildProcess = await launchChrome(Number(port), profile);
+const out: Facts = {};
+let page: Page | undefined;
 try {
   page = await Page.open(Number(port));
-  const run = scenarios[name];
+  const run: Scenario | undefined = scenarios[name];
   if (!run) throw new Error(`없는 시나리오: ${name}`);
   await run(page, make(page), out);
   out.consoleErrors = page.consoleErrors();
   console.log(JSON.stringify(out));
 } catch (e) {
-  const screen = await page?.eval(`JSON.stringify({ poll: document.getElementById('poll-text').textContent, live: document.getElementById('poll-dot').classList.contains('live'), progress: document.getElementById('p-processed').textContent, running: document.getElementById('p-running').textContent, error: document.getElementById('error-notice').textContent })`).catch(() => null);
-  const server = await fetch(new URL('api/sessions/latest', base)).then((r) => r.json()).then((d) => JSON.stringify({ processing: d.processing, counts: d.counts })).catch(() => null);
-  console.error(`✗ ${name}: ${e.message}\n화면: ${screen}\n서버: ${server}\n지금까지 본 것: ${JSON.stringify(out)}\n콘솔 오류: ${JSON.stringify(page?.consoleErrors() ?? [])}`);
+  const message: string = e instanceof Error ? e.message : String(e);
+  // 실패했을 때 그 순간의 화면과 서버 상태를 같이 남긴다
+  const screen: string | null = await page?.eval<string>(`JSON.stringify({ poll: document.getElementById('poll-text').textContent, live: document.getElementById('poll-dot').classList.contains('live'), progress: document.getElementById('p-processed').textContent, running: document.getElementById('p-running').textContent, error: document.getElementById('error-notice').textContent })`).catch((): null => null) ?? null;
+  const server: string | null = await fetch(new URL('api/sessions/latest', base))
+    .then((r: Response): Promise<{ processing: boolean; counts: unknown }> => r.json() as Promise<{ processing: boolean; counts: unknown }>)
+    .then((d: { processing: boolean; counts: unknown }): string => JSON.stringify({ processing: d.processing, counts: d.counts }))
+    .catch((): null => null);
+  console.error(`✗ ${name}: ${message}\n화면: ${screen}\n서버: ${server}\n지금까지 본 것: ${JSON.stringify(out)}\n콘솔 오류: ${JSON.stringify(page?.consoleErrors() ?? [])}`);
   process.exitCode = 1;
 } finally {
   page?.close();

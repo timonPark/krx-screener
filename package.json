@@ -5,15 +5,17 @@
   "description": "krx-screener 화면(frontend/)의 TypeScript 빌드·검사 도구. 실행 코드는 Python 이고 여기는 화면만 다룬다.",
   "type": "module",
   "engines": {
-    "node": ">=22"
+    "node": ">=22.18"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "typecheck": "tsc -p tsconfig.json --noEmit",
-    "lint": "eslint frontend/src"
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tests/browser/tsconfig.json",
+    "lint": "eslint frontend/src tests/browser"
   },
   "devDependencies": {
+    "@types/node": "^22.20.5",
     "eslint": "^10.14.0",
+    "jiti": "^2.7.0",
     "typescript": "^6.0.3",
     "typescript-eslint": "^8.72.1"
   }
