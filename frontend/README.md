@@ -73,7 +73,7 @@ cd frontend && python3 -m http.server 8080     # http://localhost:8080/?mock=1
 // SessionDetail
 {
   "session": Session,
-  "processing": false,          // 이 세션을 처리 중인지 (잠금). true 면 화면이 10초마다 다시 부름
+  "processing": false,          // 이 세션을 처리 중인지 (잠금). true 면 화면이 10초마다 다시 부름 (쉬는 중에도 30초마다 확인한다)
   "ranked_at": null,            // 정리 실행 시각, 안 했으면 null
   "rank_stale": false,          // 정리 이후 재분석된 종목이 있으면 true
   "counts": { "pending": 112, "running": 0, "done": 3, "failed": 1 },
