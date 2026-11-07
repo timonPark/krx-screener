@@ -65,6 +65,7 @@ def test_a_session_comes_back_whole_in_seq_order_with_the_agreed_keys(client, re
         "id": str(session.id), "as_of": "2026-11-05", "created_at": body["session"]["created_at"], "total": 4,
         # 시드한 세션은 완성된 세션이다 (목록을 만드는 중의 값은 test_session_build_api 가 본다)
         "build": {"state": "ready", "stage": "", "done": 0, "total": 0, "error": ""},
+        "criteria": None,  # repo 로 만든 세션은 조건을 저장하지 않았다 (test_session_criteria_api 가 본다)
     }
     assert body["session"]["created_at"].endswith("Z")
 

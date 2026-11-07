@@ -15,7 +15,16 @@ from typing import Any
 
 import pytest
 
-from krx_screener.routes_sessions import BuildOut, CountsOut, ItemOut, SessionDetailOut, SessionOut
+from krx_screener.routes_sessions import (
+    BuildOut,
+    CountsOut,
+    CriteriaOut,
+    FiltersOut,
+    FlowCriteriaOut,
+    ItemOut,
+    SessionDetailOut,
+    SessionOut,
+)
 
 FRONTEND = Path(__file__).resolve().parents[1] / "frontend"
 REPORT_ID = re.compile(r"^\d{6}_\d{8}_\d{6}$")  # 028050_20261106_172435
@@ -105,6 +114,10 @@ def test_the_mock_answers_have_exactly_the_keys_of_the_backend_models():
     assert set(detail) == set(SessionDetailOut.model_fields)
     assert set(detail["session"]) == set(SessionOut.model_fields)
     assert set(detail["session"]["build"]) == set(BuildOut.model_fields)  # 목록을 만드는 중의 상태 (#56)
+    criteria = detail["session"]["criteria"]  # 목록을 뽑을 때 쓴 조건 (#57)
+    assert set(criteria) == set(CriteriaOut.model_fields)
+    assert set(criteria["filters"]) == set(FiltersOut.model_fields)
+    assert set(criteria["flow"]) == set(FlowCriteriaOut.model_fields)
     assert set(detail["counts"]) == set(CountsOut.model_fields)
     assert set(got["list"][0]) == set(SessionOut.model_fields)
     for item in detail["items"]:
@@ -362,3 +375,60 @@ process.exit(0);
     )
     assert got["process"] == {"status": 409, "body": {"detail": "목록을 만드는 중입니다. 끝난 뒤에 처리할 수 있습니다."}}
     assert got["organize"] == {"status": 409, "body": {"detail": "목록을 만드는 중입니다. 끝난 뒤에 정리할 수 있습니다.", "remaining": 0}}
+
+
+# --- 세션이 뽑을 때 쓴 조건으로 필터 문구를 만든다 (#57) ---
+
+CRITERIA_JS = """
+const { criteriaText, fmtWon, NO_RECORD } = await import(dir + '/criteria.js');
+"""
+
+
+@needs_node
+def test_the_filter_text_is_made_from_the_criteria():
+    got = run_js(
+        CRITERIA_JS
+        + """
+const base = { filters: { min_avg_trading_value_krw: 1_000_000_000, avg_trading_value_window: 20, price_above_ma: [20, 60], rsi_max: null },
+  exclude: ['preferred', 'spac', 'managed', 'zero_volume', 'new_listing', 'reit'], flow: { mode: 'mark', window_days: 5 } };
+const changed = { filters: { min_avg_trading_value_krw: 2_000_000_000, avg_trading_value_window: 10, price_above_ma: [5], rsi_max: 70 },
+  exclude: [], flow: { mode: 'filter', window_days: 3 } };
+console.log(JSON.stringify({ base: criteriaText(base), changed: criteriaText(changed), none: criteriaText(null), NO_RECORD }));
+"""
+    )
+    assert got["base"] == {
+        "filter": "20일 평균 거래대금 10억↑ · 종가 > 20일선 · 종가 > 60일선",  # config.yaml 의 값이면 예전 고정 문구와 같다
+        "extra": "제외: 우선주·스팩·관리종목·거래정지 의심·신규상장·리츠 · 수급: 표시만, 최근 5거래일",
+    }
+    assert got["changed"] == {
+        "filter": "10일 평균 거래대금 20억↑ · 종가 > 5일선 · RSI < 70",
+        "extra": "제외: 없음 · 수급: 약함 탈락, 최근 3거래일",
+    }
+    assert got["none"] == {"filter": "조건 기록 없음", "extra": "조건 기록 없음"} and got["NO_RECORD"] == "조건 기록 없음"
+
+
+@needs_node
+def test_money_is_written_in_korean_units():
+    got = run_js(
+        CRITERIA_JS
+        + "console.log(JSON.stringify([1_000_000_000, 1_500_000_000, 100_000_000, 50_000_000, 123_456_789_000, 5_000].map(fmtWon)));"
+    )
+    assert got == ["10억", "15억", "1억", "5,000만", "1,234.57억", "5,000"]
+
+
+@needs_node
+def test_each_mock_session_has_its_own_criteria_and_the_old_one_has_none():
+    got = run_js(
+        MOCK
+        + """
+config.mockBuildMs = 50;
+const list = await api.listSessions();
+const created = await api.createSession('2026-11-03');
+console.log(JSON.stringify({ list, created }));
+process.exit(0);
+"""
+    )
+    seeded, legacy = got["list"]
+    assert seeded["criteria"]["filters"]["min_avg_trading_value_krw"] == 1_000_000_000 and legacy["criteria"] is None
+    assert got["created"]["criteria"]["filters"]["min_avg_trading_value_krw"] == 2_000_000_000  # 설정을 바꾼 뒤에 뽑은 목록
+    assert got["created"]["criteria"] != seeded["criteria"]

@@ -38,19 +38,19 @@ from krx_screener.prices import PriceFetchError, PriceStore
 def test_health_reports_the_schema_version_and_the_db_agrees(client, pg_conn):
     response = client.get("/api/health")
     assert response.status_code == 200
-    assert response.json() == {"status": "ok", "db": "ok", "schema_version": 3}
+    assert response.json() == {"status": "ok", "db": "ok", "schema_version": 4}
     # 응답이 말한 버전이 DB 에 실제로 있다
-    assert pg_conn.execute("SELECT max(version) FROM schema_migrations").fetchone()[0] == 3
+    assert pg_conn.execute("SELECT max(version) FROM schema_migrations").fetchone()[0] == 4
 
 
 def _downgrade_to_version_1(conn):
     """스키마를 버전 1 로 되돌린다 (코드는 새 버전인데 DB 에 `db init` 을 안 한 상황)."""
-    conn.execute("DELETE FROM schema_migrations WHERE version IN (2, 3)")
+    conn.execute("DELETE FROM schema_migrations WHERE version IN (2, 3, 4)")
     conn.execute("DROP INDEX sessions_building_as_of_idx")
     conn.execute("DROP INDEX sessions_cli_as_of_idx")
     conn.execute(
         "ALTER TABLE sessions DROP COLUMN source, DROP COLUMN build_state, DROP COLUMN build_stage, "
-        "DROP COLUMN build_done, DROP COLUMN build_total, DROP COLUMN build_error"
+        "DROP COLUMN build_done, DROP COLUMN build_total, DROP COLUMN build_error, DROP COLUMN criteria"
     )
     conn.execute("ALTER TABLE session_items DROP COLUMN archived, DROP COLUMN elapsed_seconds")
 

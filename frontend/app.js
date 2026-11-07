@@ -1,5 +1,6 @@
 import { api, ApiError } from './api.js';
 import { config } from './config.js';
+import { criteriaText } from './criteria.js';
 import { createNotice } from './notice.js';
 import { reportHref } from './report.js';
 
@@ -102,6 +103,10 @@ function render() {
   $('m-asof').textContent = d?.session.as_of || '—';
   $('m-created').textContent = d ? fmtDateTime(d.session.created_at) : '—';
   $('m-total').textContent = d && build.state === 'ready' ? fmtInt(total) : '—';
+  // 필터 문구는 이 세션이 목록을 뽑을 때 쓴 조건으로 만든다 (#57). 세션이 없으면 —
+  const text = d ? criteriaText(d.session.criteria) : { filter: '—', extra: '—' };
+  $('m-filter').textContent = text.filter;
+  $('m-extra').textContent = text.extra;
 
   // 갱신 표시
   const building = build.state === 'building';

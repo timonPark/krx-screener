@@ -28,6 +28,7 @@ from pydantic import BaseModel, Field
 
 from krx_screener.analysis import RATING_LABELS, REVIEW
 from krx_screener.asof import resolve_as_of
+from krx_screener.config import criteria_of
 from krx_screener.flow import STATUS_LABELS
 from krx_screener.processing import process_codes
 from krx_screener.repository import Item, NotFoundError, Session, SessionRepository
@@ -57,12 +58,33 @@ class BuildOut(BaseModel):
     error: str  # failed 일 때 한국어 사유
 
 
+class FiltersOut(BaseModel):
+    min_avg_trading_value_krw: int
+    avg_trading_value_window: int
+    price_above_ma: list[int]
+    rsi_max: float | None  # None 이면 RSI 조건 없음
+
+
+class FlowCriteriaOut(BaseModel):
+    mode: str  # mark(표시만) | filter(약함 탈락)
+    window_days: int
+
+
+class CriteriaOut(BaseModel):
+    """세션이 목록을 뽑을 때 쓴 조건 (#57). 값 그대로이고 문구는 화면이 만든다."""
+
+    filters: FiltersOut
+    exclude: list[str]  # 제외한 종류 (preferred, spac, managed, zero_volume, new_listing, reit, caution, foreign)
+    flow: FlowCriteriaOut
+
+
 class SessionOut(BaseModel):
     id: str
     as_of: date
     created_at: str  # UTC, 예: 2026-11-06T00:12:00Z
     total: int
     build: BuildOut
+    criteria: CriteriaOut | None  # None 이면 조건 기록 없음 (기존 세션, 명령줄 세션)
 
     @classmethod
     def of(cls, session: Session, build_state: str | None = None) -> SessionOut:
@@ -75,7 +97,12 @@ class SessionOut(BaseModel):
             error=session.build_error,
         )
         return cls(
-            id=str(session.id), as_of=session.as_of, created_at=_utc(session.created_at), total=session.total, build=build
+            id=str(session.id),
+            as_of=session.as_of,
+            created_at=_utc(session.created_at),
+            total=session.total,
+            build=build,
+            criteria=session.criteria,
         )
 
 
@@ -154,7 +181,7 @@ def create_session(body: SessionCreate, request: Request, background: Background
         # 세션이 보이기 전에 잠금을 먼저 쥔다: 잠금 없는 만드는 중 세션은 '중단됨'으로 보여 다른 요청이 지울 수 있다
         repo.try_lock(session_id)
         try:
-            session = repo.create_building_session(session_id, body.as_of)
+            session = repo.create_building_session(session_id, body.as_of, criteria_of(deps.config))
         except psycopg.errors.UniqueViolation:  # 같은 기준일을 이미 만드는 중이다 (DB 의 유일 인덱스가 막는다)
             running = repo.building_session_id(body.as_of)
             return JSONResponse(

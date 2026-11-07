@@ -292,3 +292,25 @@ def test_a_session_is_interrupted_when_nobody_holds_its_build_lock(repo, hold_lo
     assert repo.effective_build_state(session) == "building"
     repo.finish_build(session.id, [])
     assert repo.effective_build_state(repo.get_session(session.id)) == "ready"
+
+
+# --- 목록 조건 (#57) ---
+
+CRITERIA = {
+    "filters": {"min_avg_trading_value_krw": 2_000_000_000, "avg_trading_value_window": 20, "price_above_ma": [5, 20], "rsi_max": None},
+    "exclude": ["preferred", "spac"],
+    "flow": {"mode": "mark", "window_days": 5},
+}
+
+
+def test_a_session_keeps_the_criteria_it_was_made_with(repo):
+    session = repo.create_building_session(uuid.uuid4(), AS_OF, CRITERIA)
+    assert session.criteria == CRITERIA
+    assert repo.get_session(session.id).criteria == CRITERIA
+    assert [s.criteria for s in repo.list_sessions()] == [CRITERIA]
+    assert repo.latest_session().criteria == CRITERIA
+
+
+def test_a_session_without_criteria_says_so_with_none(repo):
+    assert repo.create_session(AS_OF).criteria is None  # 명령줄 세션·기존 세션: 기록 없음
+    assert repo.create_building_session(uuid.uuid4(), date(2026, 11, 4)).criteria is None

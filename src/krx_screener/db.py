@@ -127,6 +127,14 @@ MIGRATIONS: list[tuple[int, str, str]] = [
             WHERE build_state = 'building' AND source = 'web';
         """,
     ),
+    (
+        4,
+        "세션에 목록 조건 저장: 화면의 필터 문구가 세션마다 자기 조건을 보이게 한다",
+        """
+        -- 목록을 뽑을 때 쓴 조건(필터 값, 제외한 종류, 수급 방식)의 JSON. NULL 이면 조건 기록 없음 (기존 세션, 명령줄 세션).
+        ALTER TABLE sessions ADD COLUMN criteria jsonb;
+        """,
+    ),
 ]
 
 

@@ -16,6 +16,7 @@ from datetime import date, datetime
 
 import psycopg
 from psycopg.rows import dict_row
+from psycopg.types.json import Jsonb
 
 STATES = ("pending", "running", "done", "failed")
 
@@ -38,6 +39,8 @@ class Session:
     build_done: int = 0
     build_total: int = 0
     build_error: str = ""
+    # 목록을 뽑을 때 쓴 조건 (#57). None 이면 조건 기록 없음 (기존 세션, 명령줄 세션)
+    criteria: dict | None = None
 
 
 @dataclass(frozen=True)
@@ -88,7 +91,7 @@ _LISTED = (
 _ITEM_COLUMNS = ", ".join(f.name for f in fields(Item))
 _SESSION_SQL = (
     "SELECT s.id, s.as_of, s.created_at, s.ranked_at, s.source, "
-    "s.build_state, s.build_stage, s.build_done, s.build_total, s.build_error, "
+    "s.build_state, s.build_stage, s.build_done, s.build_total, s.build_error, s.criteria, "
     "(SELECT count(*) FROM session_items i WHERE i.session_id = s.id AND NOT i.archived) AS total "
     "FROM sessions s"
 )
@@ -113,14 +116,15 @@ class SessionRepository:
 
     # --- 목록을 만드는 중인 세션 (#56) ---
 
-    def create_building_session(self, session_id: uuid.UUID, as_of: date) -> Session:
+    def create_building_session(self, session_id: uuid.UUID, as_of: date, criteria: dict | None = None) -> Session:
         """종목이 없는 채로 만드는 중(building)인 세션을 만든다. 같은 기준일에 이미 만드는 중이면 ``UniqueViolation``.
 
         ``session_id`` 는 부르는 쪽이 정한다: 세션이 보이기 **전에** 그 id 의 처리 잠금을 먼저 쥐어 두어야 다른 요청이 잠금 없는
-        만들기(=중단됨)로 오해해 지우지 않는다.
+        만들기(=중단됨)로 오해해 지우지 않는다. ``criteria`` 는 이 목록을 뽑는 데 쓰는 조건 (``config.criteria_of``).
         """
         self._conn.execute(
-            "INSERT INTO sessions (id, as_of, build_state) VALUES (%s, %s, 'building')", (session_id, as_of)
+            "INSERT INTO sessions (id, as_of, build_state, criteria) VALUES (%s, %s, 'building', %s)",
+            (session_id, as_of, None if criteria is None else Jsonb(criteria)),
         )
         session = self.get_session(session_id)
         assert session is not None
