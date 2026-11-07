@@ -10,6 +10,7 @@
 | `app.js` | 화면 상태, 그리기, 버튼 동작, 처리 중 주기적 갱신 |
 | `api.js` | 백엔드 호출 (경로는 아래 API 계약) |
 | `report.js` | 보고서 링크 주소 만들기 |
+| `criteria.js` | 세션의 조건(`criteria`)을 필터·제외·수급 문구로 바꾸기 |
 | `notice.js` | 오류 알림 (동작 오류와 조회 오류가 사라지는 때를 구분) |
 | `mock.js` | 백엔드 없이 보는 예시 API (`?mock=1`) |
 | `config.js` | API 주소, 갱신 간격, 보고서 링크 주소 |
@@ -53,7 +54,10 @@ cd frontend && python3 -m http.server 8080     # http://localhost:8080/?mock=1
 ```jsonc
 // Session
 { "id": "3f2a9c1b7d4e...", "as_of": "2026-11-05", "created_at": "2026-11-06T00:12:00Z", "total": 116,
-  "build": { "state": "ready", "stage": "", "done": 0, "total": 0, "error": "" } }
+  "build": { "state": "ready", "stage": "", "done": 0, "total": 0, "error": "" },
+  "criteria": { "filters": { "min_avg_trading_value_krw": 1000000000, "avg_trading_value_window": 20, "price_above_ma": [20, 60], "rsi_max": null },
+                "exclude": ["preferred", "spac", "managed", "zero_volume", "new_listing", "reit"],
+                "flow": { "mode": "mark", "window_days": 5 } } }   // 목록을 뽑을 때 쓴 조건. 기록이 없으면 null (화면은 "조건 기록 없음")
 // build.state: building | ready | failed | interrupted. building 의 stage: prices → flow → sector, done/total 은 그 단계의 개수
 // 화면 표시는 `{as_of}-{id 앞 8자리}`
 

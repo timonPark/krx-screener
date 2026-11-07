@@ -176,7 +176,7 @@ GET https://stock.naver.com/api/domestic/detail/{종목코드}/detail?codeType=K
 | 3 조회 | `GET /api/sessions/{id}` (`id` 자리에 `latest` 가능) | `routes_sessions.py` |
 | 4 정리 | `POST /api/sessions/{id}/organize` | `routes_sessions.py`, `repository.py` |
 | 상태 확인 | `GET /api/health` | `api.py` |
-| 저장 | PostgreSQL (스키마 v3) | `db.py`, `repository.py` |
+| 저장 | PostgreSQL (스키마 v4) | `db.py`, `repository.py` |
 | 화면 | `krx-screener serve` → `/` | `server.py`, `frontend/` |
 | 명령줄 분석 대기열 | `run`·`analyze`·`list` | `analysis_queue.py`, `cli.py` |
 
@@ -188,6 +188,8 @@ GET https://stock.naver.com/api/domestic/detail/{종목코드}/detail?codeType=K
   - 같은 기준일을 이미 만드는 중이면 `409 {"detail": …, "session_id": …}`. 잠금을 먼저 잡고 행을 넣으며, 부분 유일 인덱스(`sessions_building_as_of_idx`)가 한 번 더 막는다.
   - 같은 기준일을 다시 뽑으면 못 끝낸 목록(실패·중단)은 지우고 새로 만든다. 만드는 중인 목록에는 처리(`process`)·정리(`organize`)가 `409` 다.
   - 종목 저장이 실패하면 이전과 달리 세션이 `failed` 로 남는다 (이전에는 세션이 남지 않았다).
+- **세션이 목록을 뽑을 때 쓴 조건을 저장한다 (#57).** `sessions.criteria`(jsonb, 스키마 v4)에 필터 값·제외한 종류·수급 방식을 값 그대로 넣고(`config.criteria_of`), 세션 응답의 `criteria` 로 내려준다.
+  한국어 문구는 서버가 만들지 않고 화면이 만든다. `NULL`(= 응답의 `null`)은 조건 기록 없음이다: 스키마 v4 이전의 세션과 명령줄 세션이 그렇다 (옛 세션을 지금 설정으로 채우면 틀린 값일 수 있어서 채우지 않았다).
 
 - **점수가 없는 종목은 순위에서 뺀다.** 끝났지만 에이전트 등급을 하나도 읽지 못한 종목은 점수를 0으로 지어내지 않고 순위를 비운다. 정리 응답의 `unscored` 가 그 개수다 (8장, `2026-11-07-24-organize-api.md`).
 - **정리도 처리 잠금을 쥔다.** 처리 중인 세션은 정리하지 않는다 (같은 문서).
