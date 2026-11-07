@@ -3,6 +3,7 @@ export interface Config {
   apiBase: string;
   pollMs: number;
   buildPollMs: number;
+  idlePollMs: number;
   reportUrlTemplate: string | null;
   minutesPerItem: number;
   mock: boolean;
@@ -19,6 +20,9 @@ export const config: Config = {
   pollMs: 10_000,
   // 목록을 만드는 중일 때 조회를 다시 부르는 간격(ms). 진행 숫자가 자주 바뀌어서 처리 중보다 짧다
   buildPollMs: 2_000,
+  // 쉬는 중(처리도 목록 만들기도 하지 않을 때)에 조회를 다시 부르는 간격(ms). 다른 탭·API·명령줄이 시작한 처리를 새로고침 없이 알아챈다.
+  // 탭이 보일 때만 부르고(숨겨지면 멈췄다가 다시 보이면 바로 한 번 부른다), 0 이면 끈다. 예시 모드(mock)는 끈다.
+  idlePollMs: 30_000,
   // TradingAgents-KR 보고서 화면 주소. {report_id} 가 보고서 번호(예: 028050_20261106_172435)로 바뀐다.
   // null 이면 보고서 번호를 링크 없이 글자로만 보여준다. 예:
   //   'http://localhost:4321/report?id={report_id}'                                   (TradingAgents-KR 웹 화면, `npm run dev`)

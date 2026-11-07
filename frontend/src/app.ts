@@ -26,9 +26,12 @@ interface State {
   pollTimer: number | undefined;
   busy: boolean;
   buildState: BuildState;
+  refreshSeq: number; // 조회를 보낼 때마다 올린다: 가장 최근에 보낸 조회의 응답만 화면에 반영한다
 }
 
-const state: State = { sessions: [], sessionId: null, data: null, filter: 'all', sort: 'seq', pollTimer: undefined, busy: false, buildState: 'ready' };
+const state: State = {
+  sessions: [], sessionId: null, data: null, filter: 'all', sort: 'seq', pollTimer: undefined, busy: false, buildState: 'ready', refreshSeq: 0,
+};
 
 const STATUS_LABEL: Record<ItemState, string> = { pending: '대기', running: '처리 중', done: '완료', failed: '실패' };
 const GRADE_CLASS: Record<string, string> = { '매수': 'g-buy', '비중 확대': 'g-overweight', '보유': 'g-hold', '비중 축소': 'g-underweight', '매도': 'g-sell' };
@@ -105,24 +108,45 @@ async function loadSessions(selectId?: string): Promise<void> {
   if (state.sessionId) sel.value = state.sessionId;
 }
 
+// 쉬는 중에 조회를 다시 부르는 간격(ms). 0 이면 부르지 않는다 (예시 모드는 화면 밖에서 데이터가 바뀌지 않는다)
+const idleMs = (): number => (config.mock ? 0 : config.idlePollMs);
+const tabVisible = (): boolean => document.visibilityState !== 'hidden';
+
 async function refresh(): Promise<void> {
   clearTimeout(state.pollTimer);
+  state.refreshSeq += 1;
+  const seq: number = state.refreshSeq;
   if (!state.sessionId) { state.data = null; render(); return; }
   try {
-    state.data = await api.getSession(state.sessionId);
+    const data: SessionDetail = await api.getSession(state.sessionId);
+    if (seq !== state.refreshSeq) return;   // 그 사이에 더 나중에 보낸 조회가 있다: 이 응답은 옛 상태라 버린다 (다음 조회가 화면과 예약을 맡는다)
+    state.data = data;
     notice.clearIfFromRefresh();   // 동작이 실패해서 띄운 오류는 이 조회가 성공해도 지우지 않는다
     const was: BuildState = state.buildState;
     state.buildState = buildOf(state.data).state;
     if (was === 'building' && state.buildState !== 'building') await loadSessions(state.sessionId);   // 세션 목록의 '만드는 중' 표시를 지운다
   } catch (err) {
+    if (seq !== state.refreshSeq) return;
     showError(err);
   }
   render();
+  scheduleRefresh();
+}
+
+// 다음 조회를 예약한다: 만드는 중 2초, 처리 중 10초, 그 밖(쉬는 중)은 idlePollMs 마다 (탭이 보일 때만)
+function scheduleRefresh(): void {
   const building: boolean = buildOf(state.data).state === 'building';
   if (state.data?.processing || building) {
     const ms: number = building ? (config.mock ? config.mockBuildPollMs : config.buildPollMs) : (config.mock ? config.mockPollMs : config.pollMs);
     state.pollTimer = setTimeout(refresh, ms);
+  } else if (idleMs() > 0 && state.sessionId && tabVisible()) {
+    state.pollTimer = setTimeout(idleTick, idleMs());
   }
+}
+
+// 쉬는 중의 조회. 기다리는 동안 탭이 숨겨졌으면 부르지 않고 멈춘다 (다시 보이면 visibilitychange 가 바로 한 번 부르고 이어 간다)
+function idleTick(): void {
+  if (tabVisible()) void refresh();
 }
 
 // ---------- 그리기 ----------
@@ -147,11 +171,12 @@ function render(): void {
   $('poll-dot').classList.toggle('live', !!d?.processing || building);
   const last: string = kstTime.format(new Date());
   const everyMs: number = building ? (config.mock ? config.mockBuildPollMs : config.buildPollMs) : (config.mock ? config.mockPollMs : config.pollMs);
+  const idleSuffix: string = idleMs() > 0 && state.sessionId ? ` · ${idleMs() / 1000}초마다 확인` : '';   // 쉬는 중에도 가끔 확인한다
   $('poll-text').textContent = building
     ? `목록 만드는 중 · ${everyMs / 1000}초마다 갱신 · 마지막 ${last}`
     : d?.processing
       ? `처리 중 · ${everyMs / 1000}초마다 갱신 · 마지막 ${last}`
-      : `마지막 갱신 ${last}`;
+      : `마지막 갱신 ${last}${idleSuffix}`;
 
   // 진행
   const processed: number = c.done + c.failed;
@@ -380,6 +405,11 @@ $('organize-btn').addEventListener('click', (): void => {
     await api.organize(state.sessionId);
     state.sort = 'rank'; $<HTMLSelectElement>('sort').value = 'rank';
   });
+});
+
+// 숨겨졌던 탭이 다시 보이면 바로 한 번 조회한다 (그 사이 다른 곳이 처리를 시작했을 수 있다). 동작 중에는 동작이 끝나고 조회한다.
+document.addEventListener('visibilitychange', (): void => {
+  if (tabVisible() && state.sessionId && !state.busy) void refresh();
 });
 
 // ---------- 시작 ----------

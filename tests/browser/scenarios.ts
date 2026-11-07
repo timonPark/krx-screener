@@ -175,6 +175,50 @@ const scenarios: Record<string, Scenario> = {
     out.dbBack = { error: await ui.error() };
   },
 
+  // 쉬는 중인 화면이 다른 곳(API)이 시작한 처리를 새로고침 없이 알아챈다 (#71)
+  async startedElsewhere(page: Page, ui: Ui, out: Facts): Promise<void> {
+    await ctl({ polls: 15 });                                                // 종목마다 1.5초쯤 걸려서 처리 중이 보인다
+    await page.goto(base);
+    await ui.set('asof', '2026-11-05');
+    await ui.click('new-list-btn');
+    await page.waitFor(`document.getElementById('build-card').hidden && document.getElementById('m-total').textContent === '8'`, 30000);
+    out.idleBefore = { poll: await ui.text('poll-text'), start: await ui.disabled('start-btn') };
+    // 화면은 건드리지 않고 화면 밖(API)에서 처리를 시작한다
+    out.started = (await ui.api('/api/sessions/latest/process', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ offset: 0, count: 2 }) }))[0];
+    await page.waitFor(`document.getElementById('start-btn').textContent === '처리 중…'`, 15000);   // 새로고침 없이 처리 중으로 바뀐다
+    out.noticed = { poll: await ui.text('poll-text'), startDisabled: await ui.disabled('start-btn'), offsetDisabled: await ui.disabled('offset') };
+    await ui.idle();
+    out.afterFirst = { done: await ui.text('p-done'), start: await ui.text('start-btn') };
+    // 처리가 끝난 뒤에도 쉬는 중 확인으로 돌아가서, 다음에 다른 곳이 시작한 처리도 알아챈다
+    await ui.api('/api/sessions/latest/process', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ offset: 2, count: 1 }) });
+    await page.waitFor(`document.getElementById('start-btn').textContent === '처리 중…'`, 15000);
+    await ui.idle();
+    out.afterSecond = { done: await ui.text('p-done'), poll: await ui.text('poll-text') };
+  },
+
+  // 숨겨진 탭은 쉬는 중 조회를 하지 않고, 다시 보이면 바로 한 번 조회한다 (#71)
+  async hiddenTab(page: Page, ui: Ui, out: Facts): Promise<void> {
+    await page.goto(base);
+    await ui.set('asof', '2026-11-05');
+    await ui.click('new-list-btn');
+    await page.waitFor(`document.getElementById('build-card').hidden && document.getElementById('m-total').textContent === '8'`, 30000);
+    const count: string = `performance.getEntriesByType('resource').filter((e) => /\\/api\\/sessions\\/[0-9a-f-]{36}$/.test(e.name)).length`;
+    // 보이는 동안은 쉬는 중에도 조회한다 (1.5초 간격이라 4초 안에 2번은 간다)
+    const before: number = await page.eval<number>(count);
+    await sleep(4000);
+    out.visibleGrowth = (await page.eval<number>(count)) - before;
+    // 탭이 숨겨지면 멈춘다: 숨긴 채 4초(조회 간격의 두 배 넘게) 지나도 조회가 늘지 않는다
+    await page.eval<void>(`Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'hidden' })`);
+    const hiddenStart: number = await page.eval<number>(count);              // 숨기자마자 센다: 이미 예약된 조회가 지나가도 부르지 않아야 한다
+    await sleep(4000);
+    out.hiddenGrowth = (await page.eval<number>(count)) - hiddenStart;
+    // 다시 보이면 바로 한 번 조회한다 (예약된 타이머가 아니라 visibilitychange 가 부른다: 숨긴 동안 타이머는 멈췄다)
+    const shownStart: number = await page.eval<number>(count);
+    await page.eval<void>(`(() => { delete document.visibilityState; document.dispatchEvent(new Event('visibilitychange')); })()`);
+    await sleep(500);
+    out.shownGrowth = (await page.eval<number>(count)) - shownStart;
+  },
+
   // 만들지 못한 목록: 이유를 보이고 처리·정리는 막힌다
   async failedList(page: Page, ui: Ui, out: Facts): Promise<void> {
     await page.goto(base);
