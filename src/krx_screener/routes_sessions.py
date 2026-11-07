@@ -240,12 +240,15 @@ def get_session(session_id: str, request: Request) -> SessionDetailOut:
     with request.app.state.deps.connect() as conn:
         repo = SessionRepository(conn)
         session = _find_session(repo, session_id)
+        # 처리 중인지는 세션의 처리 잠금으로 안다. 종목 상태(running)는 처리하던 프로세스가 죽으면 남을 수 있다.
+        # 목록을 만드는 동안에도 같은 잠금을 쥐지만 그것은 처리가 아니다.
+        # 읽는 도중에 처리가 끝나거나 시작할 수 있어서 잠금을 종목을 읽기 전·후에 모두 보고 하나라도 쥐고 있으면 처리 중으로 답한다.
+        # (종목만 먼저 읽고 잠금을 나중에 보면 running 종목이 있는데 processing=false 가 되어 화면이 갱신을 멈추고 '처리 중' 으로 남는다.)
+        locked_before = repo.is_locked(session.id)
         counts = repo.counts(session.id)
         items = repo.items(session.id)
         build_state = repo.effective_build_state(session)
-        # 처리 중인지는 세션의 처리 잠금으로 안다. 종목 상태(running)는 처리하던 프로세스가 죽으면 남을 수 있다.
-        # 목록을 만드는 동안에도 같은 잠금을 쥐지만 그것은 처리가 아니다.
-        processing = build_state == "ready" and repo.is_locked(session.id)
+        processing = build_state == "ready" and (locked_before or repo.is_locked(session.id))
         rank_stale = repo.rank_is_stale(session.id)
     return SessionDetailOut(
         session=SessionOut.of(session, build_state),
