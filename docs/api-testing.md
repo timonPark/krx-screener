@@ -84,5 +84,12 @@ def test_health_reports_the_schema_version_and_the_db_agrees(client, pg_conn):
 - **명령줄**(`run`·`analyze`·`list`)은 `CliRunner` 로 구동하고 `queue_db` 로 결과를 본다. 분석 서버는 `cli.AnalysisClient` 를 가짜 클라이언트로 바꿔 끼운다 (`tests/test_analyze_command.py`, `tests/test_queue_commands.py`).
 - **화면 계약**(`tests/test_frontend_contract.py`)은 Node 22 이상이 있을 때만 돈다 (없으면 건너뜀). 예시 데이터(`mock.js`)의 키가 백엔드 응답 모델과 같은지, 보고서 링크·오류 알림 규칙이 맞는지 본다.
 - **화면 서빙**(`tests/test_frontend_serving.py`)은 진짜 `frontend/` 를 서빙해서 모든 파일이 열리고 JS 가 모듈 형식으로 나가는지 본다.
+- **브라우저 테스트**(`tests/test_browser_screen.py`, #58)는 헤드리스 Chrome 을 CDP 로 구동해서 실제 화면을 조작한다. Node 22 이상, Chrome, 테스트 DB 가 **모두** 있어야 돈다 (하나라도 없으면 건너뜀).
+  Chrome 은 macOS 기본 경로(`/Applications/Google Chrome.app`)를 쓰고, 다른 곳이면 `KRX_SCREENER_CHROME=<실행 파일 경로>` 로 알려 준다. 전체가 약 30초 걸린다 (`pytest tests/test_browser_screen.py` 로 따로 돌릴 수 있다).
+  - 서버는 실제 백엔드 + 테스트 DB + 실제 `frontend/` 이고 시세·수급·분석 서버만 가짜다 (`tests/browser_harness.py`). 서버 안의 가짜는 테스트 전용 `POST /__ctl` 로 실행 중에 조작한다:
+    분석 실패(`errors`), 처리가 끝나기 전 처리 중으로 답하는 횟수(`polls`), 분석 서버 꺼짐(`health_error`), DB 장애(`db_down`), 목록을 만들 때 시세를 N개까지만 받고 멈춤(`build_gate`).
+  - 화면의 갱신 간격(`config.js`)은 테스트에서만 짧게 바꿔 내려준다 (갱신 코드는 그대로 돈다).
+  - 시나리오(`tests/browser/scenarios.mjs`)는 화면에서 본 사실을 JSON 으로 내고 판정은 pytest 가 한다. 시나리오: 새 목록(진행·중복 409·조건 문구), 처리와 정리(갱신·정리 막힘·낡음), 오류 알림이 남거나 사라지는 규칙, 만들지 못한 목록, 예시 모드. 콘솔 오류가 있으면 실패한다.
+  - 새 시나리오는 `scenarios.mjs` 에 함수를 더하고 `test_browser_screen.py` 에 테스트를 더한다. 실패하면 그때의 화면과 서버 상태가 오류 출력에 같이 나온다.
 
 이 틀 자체의 테스트(`tests/test_api_base.py`)는 가짜들이 실제 소비 코드(분석 호출, 수급 판정, 시세 저장소)에서 그대로 쓰이는지도 확인한다. 가짜를 새로 만들 때 참고한다.
