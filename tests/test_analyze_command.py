@@ -28,6 +28,7 @@ class _Server:
         self.decisions = {"000010": "Buy", "000020": "Hold", "000030": "Overweight"}
         self.errors: set[str] = set()
         self.health_error = False
+        self.running: dict[tuple[str, str], str] = {}  # (종목코드, 기준일) → 서버에서 아직 도는 분석의 run_id
         self.on_snapshot = None  # 분석 도중에 호출된다 (진행 상태를 DB 에서 들여다보는 테스트용)
 
 
@@ -42,6 +43,9 @@ def server(monkeypatch):
         def check_health(self):
             if srv.health_error:
                 raise AnalysisError("TradingAgents-KR 서버에 연결하지 못했습니다")
+
+        def find_running(self, ticker, trade_date):
+            return srv.running.get((ticker, trade_date))  # 서버에 이미 도는 분석 (#70)
 
         def start(self, ticker, trade_date, effort):
             srv.started.append((ticker, trade_date, effort))
@@ -133,6 +137,17 @@ def test_rerun_reuses_finished_analysis_without_asking_or_sending(tmp_path, serv
     assert again.exit_code == 0, again.output
     assert server.started == sent
     assert "재사용" in _flat(again)
+
+
+def test_an_analysis_already_running_on_the_server_is_waited_for_instead_of_sent_again(tmp_path, server, queue_db):
+    """시간 초과로 기다리기를 멈춘 분석이 서버에서 아직 도는 중이면 새로 보내지 않고 이어서 기다려 결과를 저장한다 (#70)."""
+    day = _make_results(tmp_path / "results")
+    server.running[("000010", DATE)] = "run-000010"  # 서버에서 이미 도는 분석
+    result = _analyze(tmp_path, "--count", "1", "--yes")
+    assert result.exit_code == 0, result.output
+    assert server.started == []  # 새 분석(쿼터)을 더 쓰지 않았다
+    rows = list(csv.DictReader((day / "analysis.csv").open(encoding="utf-8-sig")))
+    assert [(r["code"], r["status"], r["decision"]) for r in rows if r["code"] == "000010"] == [("000010", "done", "Buy")]
 
 
 def test_redo_sends_again(tmp_path, server, queue_db):
