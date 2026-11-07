@@ -27,7 +27,7 @@ def test_creating_a_session_returns_it_and_stores_it(client, pg_conn):
     response = client.post("/api/sessions", json={"as_of": "2026-11-05"})
     assert response.status_code == 202  # 목록은 뒤에서 만든다 (#56)
     body = response.json()
-    assert set(body) == {"id", "as_of", "created_at", "total", "build"}
+    assert set(body) == {"id", "as_of", "created_at", "total", "build", "criteria"}
     assert (body["as_of"], body["total"], body["build"]["state"]) == ("2026-11-05", 0, "building")  # 응답은 만들기를 시작한 모습
     finished = client.get(f"/api/sessions/{body['id']}").json()["session"]
     assert (finished["total"], finished["build"]["state"]) == (3, "ready")  # 기본 세계의 세 종목이 모두 목록에 들어간다

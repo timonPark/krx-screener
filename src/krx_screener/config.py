@@ -74,6 +74,24 @@ class Config:
     raw: dict[str, Any]  # run.json 에 그대로 남기기 위한 원본
 
 
+def criteria_of(config: Config) -> dict[str, Any]:
+    """목록을 뽑을 때 쓰는 조건 (세션에 저장하고 화면이 문구로 바꾼다). 값 그대로이고 한국어 문구는 화면이 만든다.
+
+    ``rsi_period`` 는 값을 계산하는 기간일 뿐 조건이 아니라 넣지 않는다. ``exclude`` 는 고른 것만 ``EXCLUDE_KEYS`` 순서로 낸다.
+    """
+    filters = config.filters
+    return {
+        "filters": {
+            "min_avg_trading_value_krw": filters.min_avg_trading_value_krw,
+            "avg_trading_value_window": filters.avg_trading_value_window,
+            "price_above_ma": list(filters.price_above_ma),
+            "rsi_max": filters.rsi_max,
+        },
+        "exclude": [key for key in EXCLUDE_KEYS if key in config.exclude],
+        "flow": {"mode": config.flow.mode, "window_days": config.flow.window_days},
+    }
+
+
 def _positive_int(value: Any, name: str) -> int:
     # bool 은 int 의 하위 클래스라 따로 막는다 (true 가 1 로 통과하는 것 방지).
     if isinstance(value, bool) or not isinstance(value, int) or value <= 0:

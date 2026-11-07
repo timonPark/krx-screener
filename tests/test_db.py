@@ -112,7 +112,7 @@ def _item(conn, sid, seq=1, code="028050", **extra):
 
 @needs_db
 def test_init_creates_the_schema_on_an_empty_database(conn):
-    assert db.init_schema(conn) == [1, 2, 3]
+    assert db.init_schema(conn) == [1, 2, 3, 4]
     assert {"sessions", "session_items", "item_agent_ratings", "schema_migrations"} <= _tables(conn)
 
 
@@ -121,7 +121,7 @@ def test_init_is_safe_to_repeat(conn):
     db.init_schema(conn)
     assert db.init_schema(conn) == []
     versions = [r[0] for r in conn.execute("SELECT version FROM schema_migrations ORDER BY version")]
-    assert versions == [1, 2, 3]
+    assert versions == [1, 2, 3, 4]
 
 
 @needs_db
@@ -129,7 +129,7 @@ def test_tables_hold_everything_the_api_contract_needs(conn):
     db.init_schema(conn)
     assert _columns(conn, "sessions") == {
         "id", "as_of", "created_at", "ranked_at", "source",
-        "build_state", "build_stage", "build_done", "build_total", "build_error",
+        "build_state", "build_stage", "build_done", "build_total", "build_error", "criteria",
     }
     assert {
         "session_id", "seq", "code", "name", "market", "close", "avg_trading_value", "rsi",
@@ -280,3 +280,18 @@ def test_an_unknown_build_state_is_rejected(conn):
     db.init_schema(conn)
     with pytest.raises(psycopg.errors.CheckViolation):
         conn.execute("INSERT INTO sessions (id, as_of, build_state) VALUES (gen_random_uuid(), '2026-11-05', 'interrupted')")  # 중단됨은 저장하지 않고 계산한다
+
+
+@needs_db
+def test_criteria_is_empty_for_a_session_that_has_none(conn):
+    db.init_schema(conn)
+    sid = _session(conn)
+    assert conn.execute("SELECT criteria FROM sessions WHERE id = %s", (sid,)).fetchone()[0] is None  # 기록 없음
+
+
+@needs_db
+def test_criteria_keeps_a_json_document(conn):
+    db.init_schema(conn)
+    sid = _session(conn)
+    conn.execute("UPDATE sessions SET criteria = '{\"flow\": {\"mode\": \"mark\"}}' WHERE id = %s", (sid,))
+    assert conn.execute("SELECT criteria FROM sessions WHERE id = %s", (sid,)).fetchone()[0] == {"flow": {"mode": "mark"}}

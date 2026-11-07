@@ -23,6 +23,17 @@ const ROWS = [
 
 // 목록을 만드는 중의 상태 (백엔드의 build). 완성된 세션은 ready 다.
 const READY = { state: 'ready', stage: '', done: 0, total: 0, error: '' };
+// 목록을 뽑을 때 쓴 조건 (백엔드의 session.criteria). 새로 뽑는 예시 목록은 '설정을 바꾼 뒤' 를 흉내 내려고 다른 값을 쓴다
+const CRITERIA = {
+  filters: { min_avg_trading_value_krw: 1_000_000_000, avg_trading_value_window: 20, price_above_ma: [20, 60], rsi_max: null },
+  exclude: ['preferred', 'spac', 'managed', 'zero_volume', 'new_listing', 'reit'],
+  flow: { mode: 'mark', window_days: 5 },
+};
+const NEW_CRITERIA = {
+  filters: { min_avg_trading_value_krw: 2_000_000_000, avg_trading_value_window: 20, price_above_ma: [5, 20], rsi_max: 70 },
+  exclude: ['preferred', 'spac', 'reit'],
+  flow: { mode: 'filter', window_days: 3 },
+};
 const PRICE_COUNT = 2398;   // 시세를 받는 전종목 수 (실제 값을 흉내 낸다)
 
 // 보고서 번호 = 종목코드_저장일_저장시각 (TradingAgents-KR 의 보고서 폴더 이름, 예: 028050_20261106_172435)
@@ -33,7 +44,7 @@ const stamp = (d = new Date()) =>
 const randId = () => Math.random().toString(16).slice(2, 14).padEnd(12, '0');
 const uuid = () => (crypto.randomUUID ? crypto.randomUUID() : `${randId()}-mock`).replace(/-/g, '');
 
-function makeSession(asOf, seeded) {
+function makeSession(asOf, seeded, criteria = NEW_CRITERIA) {
   const id = seeded ? '3f2a9c1b7d4e4a0f9b21c6e8d5a03f17' : uuid();
   const items = ROWS.map((r, i) => {
     const item = {
@@ -50,7 +61,7 @@ function makeSession(asOf, seeded) {
     return item;
   });
   return {
-    session: { id, as_of: asOf, created_at: new Date().toISOString(), total: items.length, build: { ...READY } },
+    session: { id, as_of: asOf, created_at: new Date().toISOString(), total: items.length, build: { ...READY }, criteria },
     items, processing: false, ranked_at: null, rank_stale: false,
   };
 }
@@ -99,7 +110,8 @@ function counts(items) {
 }
 
 export function createMockApi(ApiError) {
-  const sessions = [makeSession('2026-11-05', true)];
+  // 맨 뒤 세션은 조건을 저장하지 않던 때의 세션이다 (criteria null → "조건 기록 없음")
+  const sessions = [makeSession('2026-11-05', true, CRITERIA), makeSession('2026-11-04', false, null)];
   const find = (id) => (!id || id === 'latest' ? sessions[0] : sessions.find((s) => s.session.id === id));
   // 값은 지연이 끝난 시점에 만든다: 만드는 중에 세션과 종목이 어긋난 채로 복사되지 않게 한다
   const delay = (make) => new Promise((ok) => setTimeout(() => ok(structuredClone(make())), 150));
