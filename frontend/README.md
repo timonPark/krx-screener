@@ -18,15 +18,15 @@
 
 ## 실행
 
-**먼저 빌드한다** (저장소 루트에서, Node 22 이상): `npm ci && npm run build` → `frontend/dist/`. 소스(`src/`)를 고친 뒤에도 다시 빌드한다 (`npm run build -- --watch` 로 저장할 때마다 빌드).
+**먼저 빌드한다** (저장소 루트에서, Node 22.18 이상): `npm ci && npm run build` → `frontend/dist/`. 소스(`src/`)를 고친 뒤에도 다시 빌드한다 (`npm run build -- --watch` 로 저장할 때마다 빌드).
 ES 모듈이라 `file://` 로 열면 막힌다. 아무 정적 서버로 연다. 빌드하지 않으면 `serve` 가 한국어로 안내하고 뜨지 않는다.
 
 ```bash
 npm run typecheck    # 타입 검사 (tsc --noEmit)
-npm run lint         # 모든 변수·함수(매개변수·반환값)에 타입이 적혀 있는지 검사 (ESLint typedef 규칙)
+npm run lint         # 모든 변수·함수(매개변수·반환값)에 타입이 적혀 있는지 검사 (ESLint typedef 규칙). frontend/src 와 tests/browser 가 대상
 ```
 
-**코드 규칙**: 모든 변수와 함수의 데이터 타입을 명시한다 (추론에 맡기지 않는다). 함수를 담는 `const f = (x: number): string => …` 의 변수 자체는 매개변수와 반환 타입으로 대신한다. 규칙은 `eslint.config.js` 에 있다.
+**코드 규칙**: 모든 변수와 함수의 데이터 타입을 명시한다 (추론에 맡기지 않는다). 함수를 담는 `const f = (x: number): string => …` 의 변수 자체는 매개변수와 반환 타입으로 대신한다. 규칙은 `eslint.config.ts` 에 있다.
 
 **백엔드와 함께 (권장)** — 백엔드가 이 폴더를 같이 서빙한다 (`apiBase: ''` 그대로, 같은 주소의 `/api` 를 불러서 CORS 불필요).
 

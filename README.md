@@ -28,7 +28,7 @@ export KRX_SCREENER_DATABASE_URL=postgresql://krx:krx@127.0.0.1:5433/krx_screene
 .venv/bin/python -m krx_screener.db init              # 스키마 만들기·갱신 (여러 번 해도 안전)
 ```
 
-- `serve` 의 화면은 TypeScript 라 **빌드해야 뜬다**: 저장소 루트에서 `npm ci && npm run build` (Node 22 이상, 화면을 고칠 때마다 다시 빌드). 자세한 것은 [frontend/README.md](frontend/README.md).
+- `serve` 의 화면은 TypeScript 라 **빌드해야 뜬다**: 저장소 루트에서 `npm ci && npm run build` (Node 22.18 이상, 화면을 고칠 때마다 다시 빌드). 자세한 것은 [frontend/README.md](frontend/README.md).
 - `run`·`analyze`·`list`·`serve` 는 PostgreSQL 이 필요하다 (`universe` 는 필요 없다). 코드를 새로 받은 뒤에는 `db init` 을 한 번 더 실행한다 (스키마가 오래됐으면 명령과 서버가 알려준다).
 - 분석(`analyze`, 웹의 "처리 시작")은 TradingAgents-KR 로컬 서버(`config.yaml` 의 `analysis.base_url`)가 **같은 컴퓨터**에 떠 있어야 한다.
   에이전트별 등급은 그 서버의 로그 폴더(`TRADINGAGENTS_RESULTS_DIR`, 기본 `~/.tradingagents/logs`)에서 읽는다.
