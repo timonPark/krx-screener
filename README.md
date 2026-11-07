@@ -47,6 +47,19 @@ export KRX_SCREENER_DATABASE_URL=postgresql://krx:krx@127.0.0.1:5433/krx_screene
 3. **조회**: 처리 여부·등급·평가점수·순위·보고서 번호를 표로 본다.
 4. **정리**: 모든 종목이 처리된 뒤에만 평가점수 높은 순으로 순위를 매긴다 (실패한 종목은 비교에서 빠진다).
 
+**화면이 "PostgreSQL 접속 정보가 없습니다" 라고 하면**: `KRX_SCREENER_DATABASE_URL` 이 `serve` 를 띄운 터미널에 없는 것이다. 위 "준비" 에서 `export` 한 터미널과 `serve` 를 띄운 터미널이 다르면 이렇게 된다 (서버는 뜨고 화면과 `/api/health` 가 같은 안내를 한다).
+서버를 `Ctrl+C` 로 끄고, **같은 터미널에서** 주소를 준 채로 다시 띄운다:
+
+```bash
+export KRX_SCREENER_DATABASE_URL=postgresql://krx:krx@127.0.0.1:5433/krx_screener
+.venv/bin/krx-screener serve
+```
+
+- 환경변수는 **`.env` 파일에서 자동으로 읽지 않는다.** `.env.example` 은 어떤 값이 있는지 보여 주는 예시일 뿐이고, `.env` 를 만들어도 읽지 않는다. 터미널의 환경변수만 읽는다.
+- 매번 입력하기 번거로우면 쉘 설정 파일(`~/.zshrc`)에 `export` 한 줄을 넣는다. 비밀번호가 든 주소라 저장소의 파일에는 넣지 않는다 (`.env` 는 커밋하지 않는다).
+- DB 가 없거나 아직 못 띄웠어도 예시 모드(`?mock=1`)는 DB 와 분석 서버 없이 뜬다.
+- DB 컨테이너(`krx-screener-postgres`)가 꺼져 있으면 `docker compose up -d` 를 저장소 폴더에서 실행한다.
+
 `serve` 는 화면(`frontend/`)과 웹 API(`/api/...`)를 **한 주소**에서 연다. 로그인이 없어서 기본은 이 컴퓨터(`127.0.0.1`)에서만 열리고,
 다른 주소로 열려면 `--allow-remote` 가 필요하다 (접속한 누구나 분석 = 쿼터 사용을 시작할 수 있다). DB 가 아직 없어도 서버는 뜨고 `/api/health` 가 한국어로 알려준다.
 화면 명세는 [docs/frontend-spec.md](docs/frontend-spec.md), 화면 파일 설명은 [frontend/README.md](frontend/README.md) 에 있다.
