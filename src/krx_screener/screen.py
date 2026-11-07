@@ -7,7 +7,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from datetime import date
 
@@ -127,6 +127,19 @@ class ScreenResult:
     flow: FlowStats | None = None  # 1.5단계를 돌렸을 때만
 
 
+def map_with_progress(pool: ThreadPoolExecutor, fn: Callable, items: list, progress: Callable[[int, int], None] | None = None) -> list:
+    """``pool.map`` 처럼 입력 순서대로 결과를 돌려주되, 진행은 **끝난 순서**로 센다.
+
+    ``pool.map`` 을 순서대로 돌면 앞 종목 하나가 느릴 때 뒤 종목이 다 끝나도 개수가 늘지 않는다.
+    ``progress(끝난 개수, 전체)`` 는 부른 쪽 스레드에서만 불린다 (DB 연결을 같이 써도 안전하다).
+    """
+    futures = [pool.submit(fn, item) for item in items]
+    for done, _ in enumerate(as_completed(futures), start=1):
+        if progress:
+            progress(done, len(futures))
+    return [future.result() for future in futures]
+
+
 def run_screen(
     classified: pd.DataFrame,
     config: Config,
@@ -148,12 +161,8 @@ def run_screen(
             return Evaluation(UNDETERMINED, f"시세 조회 실패: {exc}")
         return evaluate(history, filters, as_of, exclude_zero)
 
-    evaluations: list[Evaluation] = []
     with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
-        for done, evaluation in enumerate(pool.map(work, rows), start=1):
-            evaluations.append(evaluation)
-            if progress:
-                progress(done, len(rows))
+        evaluations = map_with_progress(pool, work, rows, progress)
 
     order = condition_names(filters)
     drop_first = dict.fromkeys(order, 0)

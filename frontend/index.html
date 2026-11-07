@@ -45,6 +45,16 @@
     </form>
   </section>
 
+  <!-- 목록을 만드는 중의 진행 (#56): 만드는 중·실패·중단됨일 때만 보인다 -->
+  <section id="build-card" class="card progress" aria-label="목록 만들기" hidden>
+    <div class="progress-head">
+      <span id="build-title" style="font-weight:600"></span>
+      <span id="build-detail" class="muted num"></span>
+    </div>
+    <div id="build-bar-wrap" class="bar" aria-hidden="true"><span class="running" id="build-bar"></span></div>
+    <p id="build-hint" class="muted" style="font-size:12px;margin:0"></p>
+  </section>
+
   <!-- 진행 요약 -->
   <section class="card progress" aria-label="진행 요약">
     <div class="progress-head">

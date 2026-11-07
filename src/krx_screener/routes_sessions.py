@@ -1,6 +1,7 @@
 """세션 주소 (이슈 #13): 세션 만들기와 목록.
 
-- ``POST /api/sessions``  ``{"as_of": "2026-11-05"}`` → 새 세션 (201)
+- ``POST /api/sessions``  ``{"as_of": "2026-11-05"}`` → 새 세션을 바로 만들고 **202** 로 응답한다. 종목은 뒤에서 채운다 (#56).
+  같은 기준일을 이미 만드는 중이면 ``409 {"detail", "session_id"}``.
 - ``GET  /api/sessions``  → 최근 순 세션 목록
 - ``GET  /api/sessions/{id}``  (``id`` 에 ``latest`` 가능) → 세션 전체 조회 (#23)
 - ``POST /api/sessions/{id}/process``  ``{"offset": 0, "count": 10}`` → 구간 처리 시작 (#17)
@@ -9,9 +10,10 @@
 기준일은 거래일이어야 한다. 입력이 잘못되면 422, 거래일이나 전종목 목록을 받을 수 없는 외부 장애면 503 이고,
 둘 다 ``{"detail": "한국어 메시지"}`` 다.
 
-세션을 만들 때 목록(분석 대상 종목)을 같이 채운다 (``listing.build_items``). 목록 계산은 시세를 종목마다
-받아서 오래 걸릴 수 있으므로 DB 연결을 열기 전에 끝내고, 세션과 종목은 한 번에 저장한다 (하나라도 실패하면
-세션도 남지 않는다). 수급 상태(#15)와 업종 정보(#16)는 목록을 만들 때 같이 채운다.
+세션을 만들 때 목록(분석 대상 종목)은 뒤에서 채운다 (``session_build.build_session``). 시세를 처음 받을 때는 전종목이라 약 20분이
+걸려서 요청이 끝나길 기다리지 않는다. 진행은 세션의 ``build`` (상태·단계·한 개수·전체 개수)로 본다: ``building`` → ``ready`` /
+``failed`` / ``interrupted``(만들던 서버가 죽음). 종목은 다 만든 뒤에 한 트랜잭션으로 저장한다. 만드는 중에는 처리·정리를 못 한다 (409).
+수급 상태(#15)와 업종 정보(#16)는 목록을 만들 때 같이 채운다.
 """
 
 from __future__ import annotations
@@ -19,6 +21,7 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, date, datetime
 
+import psycopg
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
@@ -26,9 +29,9 @@ from pydantic import BaseModel, Field
 from krx_screener.analysis import RATING_LABELS, REVIEW
 from krx_screener.asof import resolve_as_of
 from krx_screener.flow import STATUS_LABELS
-from krx_screener.listing import build_items
 from krx_screener.processing import process_codes
 from krx_screener.repository import Item, NotFoundError, Session, SessionRepository
+from krx_screener.session_build import build_session
 
 router = APIRouter(prefix="/api/sessions")
 
@@ -44,15 +47,36 @@ def _utc(moment: datetime | None) -> str | None:
     return moment.astimezone(UTC).isoformat(timespec="seconds").replace("+00:00", "Z")
 
 
+class BuildOut(BaseModel):
+    """목록을 만드는 중의 상태. 완성된 세션은 ``state = ready`` 이고 나머지 값은 의미가 없다."""
+
+    state: str  # building | ready | failed | interrupted(만들던 서버가 죽음)
+    stage: str  # 만드는 중일 때: prices(시세) | flow(수급) | sector(업종). 아니면 빈 문자열
+    done: int  # 그 단계에서 끝난 개수
+    total: int  # 그 단계의 전체 개수 (시세 단계 처음에는 아직 모르면 0)
+    error: str  # failed 일 때 한국어 사유
+
+
 class SessionOut(BaseModel):
     id: str
     as_of: date
     created_at: str  # UTC, 예: 2026-11-06T00:12:00Z
     total: int
+    build: BuildOut
 
     @classmethod
-    def of(cls, session: Session) -> SessionOut:
-        return cls(id=str(session.id), as_of=session.as_of, created_at=_utc(session.created_at), total=session.total)
+    def of(cls, session: Session, build_state: str | None = None) -> SessionOut:
+        """``build_state`` 는 ``repo.effective_build_state`` 가 계산한 값 (중단됨 포함). 주지 않으면 저장된 값을 쓴다."""
+        build = BuildOut(
+            state=build_state or session.build_state,
+            stage=session.build_stage,
+            done=session.build_done,
+            total=session.build_total,
+            error=session.build_error,
+        )
+        return cls(
+            id=str(session.id), as_of=session.as_of, created_at=_utc(session.created_at), total=session.total, build=build
+        )
 
 
 class ItemOut(BaseModel):
@@ -115,34 +139,56 @@ class SessionDetailOut(BaseModel):
     items: list[ItemOut]  # 세션 전체, 순번 순
 
 
-@router.post("", status_code=201, response_model=SessionOut)
-def create_session(body: SessionCreate, request: Request) -> SessionOut:
+@router.post("", status_code=202, response_model=SessionOut)
+def create_session(body: SessionCreate, request: Request, background: BackgroundTasks) -> JSONResponse | SessionOut:
     deps = request.app.state.deps
-    # 거래일이 아니거나 미래면 resolve_as_of 가 AsOfError(한국어)를 낸다 → api.py 가 응답으로 바꾼다
+    # 거래일이 아니거나 미래면 resolve_as_of 가 AsOfError(한국어)를 낸다 → api.py 가 응답으로 바꾼다 (세션은 만들지 않는다)
     resolve_as_of(deps.today(), body.as_of, deps.externals.prices)
-    items = build_items(
-        deps.externals,
-        deps.config,
-        body.as_of,
-        deps.today(),
-        workers=deps.workers,
-        cache_dir=deps.cache_dir,
-        retry_wait=deps.retry_wait,
-    )
-    with deps.connect() as conn:  # 한 트랜잭션: 종목 저장이 실패하면 세션도 남지 않는다
+    conn = deps.connect()
+    conn.autocommit = True
+    handed_over = False  # 연결(과 잠금)을 뒤에서 만드는 일에 넘겼는가. 넘기지 않았으면 여기서 닫아 잠금을 푼다
+    try:
         repo = SessionRepository(conn)
-        session = repo.create_session(body.as_of)
-        repo.add_items(session.id, items)
-        saved = repo.get_session(session.id)
-    assert saved is not None
-    return SessionOut.of(saved)
+        repo.discard_unfinished(body.as_of)  # 같은 기준일로 다시 뽑으면 못 끝낸(실패·중단된) 목록은 지운다
+        session_id = uuid.uuid4()
+        # 세션이 보이기 전에 잠금을 먼저 쥔다: 잠금 없는 만드는 중 세션은 '중단됨'으로 보여 다른 요청이 지울 수 있다
+        repo.try_lock(session_id)
+        try:
+            session = repo.create_building_session(session_id, body.as_of)
+        except psycopg.errors.UniqueViolation:  # 같은 기준일을 이미 만드는 중이다 (DB 의 유일 인덱스가 막는다)
+            running = repo.building_session_id(body.as_of)
+            return JSONResponse(
+                status_code=409,
+                content={
+                    "detail": f"이미 {body.as_of.isoformat()} 목록을 뽑는 중입니다.",
+                    "session_id": str(running) if running else None,
+                },
+            )
+        background.add_task(build_session, deps, conn, session_id, body.as_of)
+        handed_over = True
+        return SessionOut.of(session)
+    finally:
+        if not handed_over:
+            conn.close()
 
 
 @router.get("", response_model=list[SessionOut])
 def list_sessions(request: Request) -> list[SessionOut]:
     with request.app.state.deps.connect() as conn:
-        return [SessionOut.of(s) for s in SessionRepository(conn).list_sessions()]
+        repo = SessionRepository(conn)
+        return [SessionOut.of(s, repo.effective_build_state(s)) for s in repo.list_sessions()]
 
+
+def _unfinished_message(repo: SessionRepository, session: Session, action: str) -> str | None:
+    """목록이 아직 완성되지 않았으면(만드는 중·실패·중단됨) ``action``(처리·정리)을 못 하는 이유. 완성됐으면 None."""
+    state = repo.effective_build_state(session)
+    if state == "building":
+        return f"목록을 만드는 중입니다. 끝난 뒤에 {action}할 수 있습니다."
+    if state == "interrupted":
+        return "목록을 만들다 서버가 멈춰 완성되지 않았습니다. 같은 기준일로 다시 뽑으세요."
+    if state == "failed":
+        return f"목록을 만들지 못했습니다: {session.build_error}"
+    return None
 
 
 def _find_session(repo: SessionRepository, session_id: str) -> Session:
@@ -169,11 +215,13 @@ def get_session(session_id: str, request: Request) -> SessionDetailOut:
         session = _find_session(repo, session_id)
         counts = repo.counts(session.id)
         items = repo.items(session.id)
-        processing = repo.is_locked(session.id)
+        build_state = repo.effective_build_state(session)
+        # 처리 중인지는 세션의 처리 잠금으로 안다. 종목 상태(running)는 처리하던 프로세스가 죽으면 남을 수 있다.
+        # 목록을 만드는 동안에도 같은 잠금을 쥐지만 그것은 처리가 아니다.
+        processing = build_state == "ready" and repo.is_locked(session.id)
         rank_stale = repo.rank_is_stale(session.id)
     return SessionDetailOut(
-        session=SessionOut.of(session),
-        # 처리 중인지는 세션의 처리 잠금으로 안다. 종목 상태(running)는 처리하던 프로세스가 죽으면 남을 수 있다.
+        session=SessionOut.of(session, build_state),
         processing=processing,
         ranked_at=_utc(session.ranked_at),
         rank_stale=rank_stale,  # 정리 뒤에 분석이 바뀌어 다시 정리하면 순위가 달라질 수 있으면 true (#25)
@@ -202,6 +250,9 @@ def process(session_id: str, body: ProcessRequest, request: Request, background:
     try:
         repo = SessionRepository(conn)
         session = _find_session(repo, session_id)
+        unfinished = _unfinished_message(repo, session, "처리")
+        if unfinished:  # 만드는 중에는 같은 잠금을 만드는 쪽이 쥐고 있어서, 잠그기 전에 거른다
+            raise HTTPException(409, unfinished)
         # 구간을 읽기 전에 잠근다: 동시에 온 두 요청이 같은 종목을 둘 다 대기열에 올리지 못하게
         if not repo.try_lock(session.id):
             raise HTTPException(409, "이미 처리 중입니다.")
@@ -233,6 +284,9 @@ def organize(session_id: str, request: Request) -> JSONResponse:
         conn.autocommit = True
         repo = SessionRepository(conn)
         session = _find_session(repo, session_id)
+        unfinished = _unfinished_message(repo, session, "정리")
+        if unfinished:
+            return JSONResponse(status_code=409, content={"detail": unfinished, "remaining": 0})
         # 처리와 같은 잠금: 정리하는 동안 같은 세션의 처리가 시작되어 점수가 바뀌지 않게 한다. 연결을 닫으면 풀린다
         locked = repo.try_lock(session.id)
         counts = repo.counts(session.id)

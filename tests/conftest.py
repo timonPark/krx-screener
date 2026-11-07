@@ -65,6 +65,7 @@ def client(pg_conn, externals):
             config=repo_config(),
             today=lambda: date(2026, 11, 9),
             retry_wait=0,
+            progress_interval=0,  # 진행을 매번 적어서 테스트가 중간 모습을 볼 수 있게 한다
         )
     )
     return TestClient(app)

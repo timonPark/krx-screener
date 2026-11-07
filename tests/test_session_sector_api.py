@@ -17,10 +17,12 @@ def _swap(client, **externals):
     client.app.state.deps = replace(deps, externals=replace(deps.externals, **externals))
 
 
-def _create(client, repo):
-    response = client.post("/api/sessions", json={"as_of": "2026-11-05"})
-    assert response.status_code == 201, response.text
-    body = response.json()
+def _create(client, repo, as_of="2026-11-05"):
+    response = client.post("/api/sessions", json={"as_of": as_of})
+    assert response.status_code == 202, response.text
+    # 응답은 만들기를 시작한 세션이다. 테스트 클라이언트는 응답한 뒤에 만들기를 끝내므로 지금 조회하면 다 만든 세션이다
+    body = client.get(f"/api/sessions/{response.json()['id']}").json()["session"]
+    assert body["build"]["state"] == "ready", body
     return body, {i.code: i for i in repo.items(uuid.UUID(body["id"]))}
 
 

@@ -63,6 +63,8 @@ def test_a_session_comes_back_whole_in_seq_order_with_the_agreed_keys(client, re
     assert all(set(i) == ITEM_KEYS for i in body["items"])
     assert body["session"] == {
         "id": str(session.id), "as_of": "2026-11-05", "created_at": body["session"]["created_at"], "total": 4,
+        # 시드한 세션은 완성된 세션이다 (목록을 만드는 중의 값은 test_session_build_api 가 본다)
+        "build": {"state": "ready", "stage": "", "done": 0, "total": 0, "error": ""},
     }
     assert body["session"]["created_at"].endswith("Z")
 
@@ -146,7 +148,8 @@ def test_ranking_fields_are_empty_until_a_ranking_is_made(client, repo, pg_conn)
 def test_a_session_just_made_through_the_api_can_be_viewed_whole(client):
     created = client.post("/api/sessions", json={"as_of": "2026-11-05"}).json()
     body = get(client, created["id"]).json()
-    assert body["session"] == created  # 만들 때 받은 값과 같다
+    assert (body["session"]["id"], body["session"]["created_at"]) == (created["id"], created["created_at"])  # 만들 때 받은 세션이다
+    assert (body["session"]["total"], body["session"]["build"]["state"]) == (3, "ready")  # 뒤에서 다 만든 뒤의 값
     assert body["counts"] == {"pending": 3, "running": 0, "done": 0, "failed": 0}
     first = by_code(body)["028050"]
     # 목록(#14)·수급(#15)·업종(#16)이 한 응답에 모여 있고, 아직 처리하지 않은 종목이다

@@ -6,16 +6,10 @@
 
 import uuid
 from dataclasses import replace
-from datetime import date
 
-import psycopg
 import pytest
-from fakes import AS_OF, FakePrices, make_externals, repo_config
-from fastapi.testclient import TestClient
+from fakes import AS_OF, FakePrices, make_externals
 from helpers import falling_closes, make_history, make_listing, passing_closes
-
-from krx_screener.api import Dependencies, create_app
-from krx_screener.universe import UniverseFetchError
 
 CAUTION = "투자주의환기종목(소속부없음)"
 FOREIGN = "외국기업(소속부없음)"
@@ -79,8 +73,10 @@ def externals(tmp_path):
 
 def _create(client, repo):
     response = client.post("/api/sessions", json={"as_of": "2026-11-05"})
-    assert response.status_code == 201, response.text
-    body = response.json()
+    assert response.status_code == 202, response.text
+    # 응답은 만들기를 시작한 세션이다. 테스트 클라이언트는 응답한 뒤에 만들기를 끝내므로 지금 조회하면 다 만든 세션이다
+    body = client.get(f"/api/sessions/{response.json()['id']}").json()["session"]
+    assert body["build"]["state"] == "ready", body
     return body, repo.items(uuid.UUID(body["id"]))
 
 
@@ -172,26 +168,13 @@ def test_no_candidates_still_makes_a_session_with_an_empty_list(client, repo, ex
     assert (body["total"], items) == (0, [])
 
 
-def test_if_the_items_cannot_be_saved_the_session_is_not_saved_either(client, pg_conn, externals):
+def test_if_the_items_cannot_be_saved_none_are_kept_and_the_session_is_failed(client, pg_conn, externals):
     duplicated = make_listing([{"Code": "000010", "Name": "통과A"}, {"Code": "000010", "Name": "통과A 중복"}])
     broken = replace(externals, listing=lambda: duplicated.copy())
     client.app.state.deps = replace(client.app.state.deps, externals=broken)
-    with pytest.raises(psycopg.errors.UniqueViolation):
-        client.post("/api/sessions", json={"as_of": "2026-11-05"})
-    assert pg_conn.execute("SELECT count(*) FROM sessions").fetchone()[0] == 0  # 빈 세션이 남지 않는다
-
-
-# --- DB 없이 도는 테스트 ---
-
-
-def test_when_the_listing_cannot_be_fetched_it_is_a_korean_503(tmp_path):
-    def down():
-        raise UniverseFetchError("종목 목록을 받지 못했습니다 (ConnectionError: 연결 실패)")
-
-    externals = replace(make_externals(tmp_path), listing=down)
-    deps = Dependencies(
-        connect=lambda: None, externals=externals, config=repo_config(), today=lambda: date(2026, 11, 9), retry_wait=0
-    )
-    response = TestClient(create_app(deps)).post("/api/sessions", json={"as_of": "2026-11-05"})
-    assert response.status_code == 503
-    assert response.json() == {"detail": "종목 목록을 받지 못했습니다 (ConnectionError: 연결 실패)"}
+    created = client.post("/api/sessions", json={"as_of": "2026-11-05"})
+    assert created.status_code == 202  # 만들기를 시작한 뒤에 저장이 실패한다
+    assert pg_conn.execute("SELECT count(*) FROM session_items").fetchone()[0] == 0  # 종목은 한꺼번에 저장되거나 하나도 저장되지 않는다
+    build = client.get(f"/api/sessions/{created.json()['id']}").json()["session"]["build"]
+    # 세션은 실패로 남아서 화면이 사유를 보여 준다 (이전에는 세션도 남지 않았다)
+    assert (build["state"], build["error"]) == ("failed", "목록을 만드는 중 오류가 났습니다 (UniqueViolation).")

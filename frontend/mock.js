@@ -21,6 +21,10 @@ const ROWS = [
   ['263860', '지니언스', 'KOSDAQ', 23250, 24033763926, 51.6, '약함', -116682, -91407, '소프트웨어', '네트워크 접근제어(NAC)·보안', ['보유', -0.1, 10]],
 ];
 
+// 목록을 만드는 중의 상태 (백엔드의 build). 완성된 세션은 ready 다.
+const READY = { state: 'ready', stage: '', done: 0, total: 0, error: '' };
+const PRICE_COUNT = 2398;   // 시세를 받는 전종목 수 (실제 값을 흉내 낸다)
+
 // 보고서 번호 = 종목코드_저장일_저장시각 (TradingAgents-KR 의 보고서 폴더 이름, 예: 028050_20261106_172435)
 const SEEDED_STAMPS = ['20261106_172435', '20261106_175036', '20261106_181027'];
 const pad = (n) => String(n).padStart(2, '0');
@@ -46,7 +50,7 @@ function makeSession(asOf, seeded) {
     return item;
   });
   return {
-    session: { id, as_of: asOf, created_at: new Date().toISOString(), total: items.length },
+    session: { id, as_of: asOf, created_at: new Date().toISOString(), total: items.length, build: { ...READY } },
     items, processing: false, ranked_at: null, rank_stale: false,
   };
 }
@@ -63,6 +67,31 @@ function finish(item, reportStamp) {
   item.error_message = '';
 }
 
+// 새 목록을 뒤에서 만드는 것을 흉내 낸다: 시세 70% → 수급 15% → 업종 15% 의 시간으로 진행하고, 끝나면 종목을 채운다
+function simulateBuild(s, items) {
+  const started = Date.now();
+  const stages = [['prices', 0.7, PRICE_COUNT], ['flow', 0.15, items.length], ['sector', 0.15, items.length]];
+  const tick = () => {
+    const frac = Math.min(1, (Date.now() - started) / config.mockBuildMs);
+    if (frac >= 1) {
+      s.items = items;
+      s.session.total = items.length;
+      s.session.build = { state: 'ready', stage: '', done: items.length, total: items.length, error: '' };
+      return;
+    }
+    let from = 0;
+    for (const [stage, share, total] of stages) {
+      if (frac < from + share) {
+        s.session.build = { state: 'building', stage, done: Math.floor(((frac - from) / share) * total), total, error: '' };
+        break;
+      }
+      from += share;
+    }
+    setTimeout(tick, 100);
+  };
+  tick();
+}
+
 function counts(items) {
   const c = { pending: 0, running: 0, done: 0, failed: 0 };
   items.forEach((it) => { c[it.state] += 1; });
@@ -72,29 +101,36 @@ function counts(items) {
 export function createMockApi(ApiError) {
   const sessions = [makeSession('2026-11-05', true)];
   const find = (id) => (!id || id === 'latest' ? sessions[0] : sessions.find((s) => s.session.id === id));
-  const delay = (v) => new Promise((ok) => setTimeout(() => ok(structuredClone(v)), 150));
+  // 값은 지연이 끝난 시점에 만든다: 만드는 중에 세션과 종목이 어긋난 채로 복사되지 않게 한다
+  const delay = (make) => new Promise((ok) => setTimeout(() => ok(structuredClone(make())), 150));
   const view = (s) => {
     const items = s.items.map(({ _result, ...rest }) => rest);
     return { session: s.session, processing: s.processing, ranked_at: s.ranked_at, rank_stale: s.rank_stale, counts: counts(s.items), items };
   };
 
   return {
-    async listSessions() { return delay(sessions.map((s) => s.session)); },
+    async listSessions() { return delay(() => sessions.map((s) => s.session)); },
     async createSession(asOf) {
-      const s = makeSession(asOf, false);
+      const running = sessions.find((x) => x.session.build.state === 'building' && x.session.as_of === asOf);
+      if (running) throw new ApiError(409, { detail: `이미 ${asOf} 목록을 뽑는 중입니다.`, session_id: running.session.id });
+      const built = makeSession(asOf, false);
+      // 응답은 만들기를 시작한 세션(종목 없음)이다. 종목은 simulateBuild 가 끝낼 때 채운다
+      const s = { ...built, items: [], session: { ...built.session, total: 0, build: { state: 'building', stage: 'prices', done: 0, total: 0, error: '' } } };
       sessions.unshift(s);
-      return delay(s.session);
+      simulateBuild(s, built.items);
+      return delay(() => s.session);
     },
     async getSession(id) {
       const s = find(id);
       if (!s) throw new ApiError(404, { detail: '세션을 찾지 못했습니다.' });
-      return delay(view(s));
+      return delay(() => view(s));
     },
     async process(id, offset, count) {
       const s = find(id);
+      if (s.session.build.state !== 'ready') throw new ApiError(409, { detail: '목록을 만드는 중입니다. 끝난 뒤에 처리할 수 있습니다.' });
       if (s.processing) throw new ApiError(409, { detail: '이미 처리 중입니다.' });
       const targets = s.items.slice(offset, offset + count).filter((it) => it.state !== 'done');
-      if (!targets.length) return delay({ started: false, queued: 0 });
+      if (!targets.length) return delay(() => ({ started: false, queued: 0 }));
       s.processing = true;
       (async () => {
         for (const it of targets) {
@@ -106,10 +142,11 @@ export function createMockApi(ApiError) {
         }
         s.processing = false;
       })();
-      return delay({ started: true, queued: targets.length });
+      return delay(() => ({ started: true, queued: targets.length }));
     },
     async organize(id) {
       const s = find(id);
+      if (s.session.build.state !== 'ready') throw new ApiError(409, { detail: '목록을 만드는 중입니다. 끝난 뒤에 정리할 수 있습니다.', remaining: 0 });
       const c = counts(s.items);
       const remaining = c.pending + c.running;
       if (remaining > 0) throw new ApiError(409, { detail: `남은 ${remaining}개가 끝나야 정리할 수 있습니다.`, remaining });
@@ -119,7 +156,7 @@ export function createMockApi(ApiError) {
         .forEach((it, k) => { it.rank = k + 1; });
       s.ranked_at = new Date().toISOString();
       s.rank_stale = false;
-      return delay({ ranked: c.done, unscored: 0 });
+      return delay(() => ({ ranked: c.done, unscored: 0 }));
     },
   };
 }

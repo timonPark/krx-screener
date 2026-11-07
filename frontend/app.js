@@ -4,11 +4,22 @@ import { createNotice } from './notice.js';
 import { reportHref } from './report.js';
 
 const $ = (id) => document.getElementById(id);
-const state = { sessions: [], sessionId: null, data: null, filter: 'all', sort: 'seq', pollTimer: null, busy: false };
+const state = { sessions: [], sessionId: null, data: null, filter: 'all', sort: 'seq', pollTimer: null, busy: false, buildState: 'ready' };
 
 const STATUS_LABEL = { pending: '대기', running: '처리 중', done: '완료', failed: '실패' };
 const GRADE_CLASS = { '매수': 'g-buy', '비중 확대': 'g-overweight', '보유': 'g-hold', '비중 축소': 'g-underweight', '매도': 'g-sell' };
 const FLOW_CLASS = { '양호': 'flow-good', '부분': 'flow-partial', '약함': 'flow-weak' };
+
+// 목록을 만드는 중의 상태 (#56): building 만드는 중 · ready 완성 · failed 실패 · interrupted 만들던 서버가 죽음
+const BUILD_STAGE = { prices: '시세', flow: '수급', sector: '업종·기업 설명' };
+const BUILD_SUFFIX = { building: ' · 만드는 중', failed: ' · 실패', interrupted: ' · 중단됨' };
+const BUILD_NOT_READY = {
+  building: '목록을 만드는 중입니다. 끝난 뒤에 쓸 수 있습니다.',
+  failed: '목록을 만들지 못했습니다. 같은 기준일로 다시 뽑으세요.',
+  interrupted: '목록을 만들다 서버가 멈췄습니다. 같은 기준일로 다시 뽑으세요.',
+};
+const READY = { state: 'ready', stage: '', done: 0, total: 0, error: '' };
+const buildOf = (data) => data?.session.build || READY;
 
 // ---------- 형식 ----------
 const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -53,7 +64,7 @@ async function loadSessions(selectId) {
   state.sessions = await api.listSessions();
   const sel = $('session');
   sel.innerHTML = state.sessions.length
-    ? state.sessions.map((s, i) => `<option value="${esc(s.id)}">${esc(sessionLabel(s))}${i === 0 ? ' (최근)' : ''}</option>`).join('')
+    ? state.sessions.map((s, i) => `<option value="${esc(s.id)}">${esc(sessionLabel(s))}${esc(BUILD_SUFFIX[s.build?.state] || '')}${i === 0 ? ' (최근)' : ''}</option>`).join('')
     : '<option value="">세션 없음 — 새 목록을 뽑으세요</option>';
   state.sessionId = selectId || state.sessions[0]?.id || null;
   if (state.sessionId) sel.value = state.sessionId;
@@ -65,12 +76,17 @@ async function refresh() {
   try {
     state.data = await api.getSession(state.sessionId);
     notice.clearIfFromRefresh();   // 동작이 실패해서 띄운 오류는 이 조회가 성공해도 지우지 않는다
+    const was = state.buildState;
+    state.buildState = buildOf(state.data).state;
+    if (was === 'building' && state.buildState !== 'building') await loadSessions(state.sessionId);   // 세션 목록의 '만드는 중' 표시를 지운다
   } catch (err) {
     showError(err);
   }
   render();
-  if (state.data?.processing) {
-    state.pollTimer = setTimeout(refresh, config.mock ? config.mockPollMs : config.pollMs);
+  const building = buildOf(state.data).state === 'building';
+  if (state.data?.processing || building) {
+    const ms = building ? (config.mock ? config.mockBuildPollMs : config.buildPollMs) : (config.mock ? config.mockPollMs : config.pollMs);
+    state.pollTimer = setTimeout(refresh, ms);
   }
 }
 
@@ -80,18 +96,23 @@ function render() {
   const items = d?.items || [];
   const total = d?.session.total ?? items.length;
   const c = d?.counts || { pending: 0, running: 0, done: 0, failed: 0 };
+  const build = buildOf(d);
 
   // 세션 정보
   $('m-asof').textContent = d?.session.as_of || '—';
   $('m-created').textContent = d ? fmtDateTime(d.session.created_at) : '—';
-  $('m-total').textContent = d ? fmtInt(total) : '—';
+  $('m-total').textContent = d && build.state === 'ready' ? fmtInt(total) : '—';
 
   // 갱신 표시
-  $('poll-dot').classList.toggle('live', !!d?.processing);
+  const building = build.state === 'building';
+  $('poll-dot').classList.toggle('live', !!d?.processing || building);
   const last = kstTime.format(new Date());
-  $('poll-text').textContent = d?.processing
-    ? `처리 중 · ${(config.mock ? config.mockPollMs : config.pollMs) / 1000}초마다 갱신 · 마지막 ${last}`
-    : `마지막 갱신 ${last}`;
+  const everyMs = building ? (config.mock ? config.mockBuildPollMs : config.buildPollMs) : (config.mock ? config.mockPollMs : config.pollMs);
+  $('poll-text').textContent = building
+    ? `목록 만드는 중 · ${everyMs / 1000}초마다 갱신 · 마지막 ${last}`
+    : d?.processing
+      ? `처리 중 · ${everyMs / 1000}초마다 갱신 · 마지막 ${last}`
+      : `마지막 갱신 ${last}`;
 
   // 진행
   const processed = c.done + c.failed;
@@ -103,11 +124,35 @@ function render() {
   $('b-running').style.width = pct(c.running);
 
   $('stale-notice').hidden = !d?.rank_stale;
+  renderBuild(build);
 
   renderChips(c, total);
   renderRows(items, total);
   renderProcess(items, total);
   renderOrganize(c, d);
+}
+
+function renderBuild(build) {
+  $('build-card').hidden = build.state === 'ready';
+  if (build.state === 'ready') return;
+  $('build-bar-wrap').hidden = build.state !== 'building';
+  if (build.state === 'building') {
+    const label = BUILD_STAGE[build.stage] || '시세';
+    const known = build.total > 0;
+    $('build-title').textContent = '목록을 만드는 중입니다';
+    $('build-detail').textContent = known ? `${label} 조회 ${fmtInt(build.done)} / ${fmtInt(build.total)}` : `${label} 조회 준비 중`;
+    $('build-bar').style.width = known ? `${Math.min(100, (build.done / build.total) * 100)}%` : '0%';
+    $('build-hint').textContent = '시세를 처음 받을 때는 전종목(약 2,400개)이라 약 20분 걸립니다. 같은 기준일을 다시 뽑으면 훨씬 빠릅니다. '
+      + '화면을 닫거나 새로고침해도 서버가 계속 만듭니다.';
+  } else if (build.state === 'failed') {
+    $('build-title').textContent = '목록을 만들지 못했습니다';
+    $('build-detail').textContent = build.error;
+    $('build-hint').textContent = '같은 기준일로 다시 뽑으면 이 목록은 지워지고 새로 만듭니다.';
+  } else {
+    $('build-title').textContent = '목록을 만들다 서버가 멈췄습니다';
+    $('build-detail').textContent = '';
+    $('build-hint').textContent = '같은 기준일로 다시 뽑으면 이 목록은 지워지고 새로 만듭니다.';
+  }
 }
 
 function renderChips(c, total) {
@@ -180,6 +225,8 @@ function renderRows(items, total) {
       <td class="nw">${reportCell(it)}</td>
     </tr>`;
   }).join('');
+  const buildState = buildOf(state.data).state;
+  $('empty').textContent = buildState === 'building' ? '목록을 만드는 중입니다.' : buildState === 'ready' ? '조건에 맞는 종목이 없습니다.' : '완성된 목록이 없습니다.';
   $('empty').hidden = visible.length > 0;
   $('row-count').textContent = `${fmtInt(total)}개 중 ${fmtInt(visible.length)}개 표시`;
 }
@@ -205,7 +252,10 @@ function renderProcess(items, total) {
 
   let hint = '누르면 바로 시작 응답을 받고 처리는 뒤에서 진행됩니다. 진행 상황은 위 표에서 갱신됩니다.';
   let disabled = state.busy || !state.data;
-  if (processing) {
+  const build = buildOf(state.data);
+  if (build.state !== 'ready') {
+    hint = BUILD_NOT_READY[build.state]; disabled = true;
+  } else if (processing) {
     const cur = items.find((it) => it.state === 'running');
     hint = `이 세션은 이미 처리 중입니다${cur ? ` (지금 ${cur.seq}번 ${cur.name})` : ''}. 서버에 취소 기능이 없어 중간에 멈출 수 없습니다.`;
     disabled = true;
@@ -227,6 +277,8 @@ function renderOrganize(c, d) {
   const remaining = c.pending + c.running;
   const btn = $('organize-btn');
   btn.textContent = d?.ranked_at ? '정리 다시 실행' : '정리 실행';
+  const build = buildOf(d);
+  if (build.state !== 'ready') { btn.disabled = true; $('organize-hint').textContent = BUILD_NOT_READY[build.state]; return; }
   if (!d || !d.session.total) { btn.disabled = true; $('organize-hint').textContent = ''; return; }
   if (remaining > 0) {
     btn.disabled = true;
@@ -260,8 +312,15 @@ $('new-list').addEventListener('submit', (e) => {
   const btn = $('new-list-btn');
   btn.disabled = true; btn.textContent = '뽑는 중…';
   withBusy(async () => {
-    const s = await api.createSession(asOf);
-    await loadSessions(s.id);
+    let s;
+    try {
+      s = await api.createSession(asOf);
+    } catch (err) {
+      // 같은 기준일 목록을 이미 만드는 중이면 그 세션으로 옮겨서 진행을 보여 주고, 메시지는 알림으로 남는다
+      if (err instanceof ApiError && err.status === 409 && err.body.session_id) await loadSessions(err.body.session_id);
+      throw err;
+    }
+    await loadSessions(s.id);   // 응답은 만들기를 시작한 세션이다. 진행은 이어지는 조회(refresh)가 보여 준다
     state.filter = 'all'; state.sort = 'seq';
     $('offset').value = 0;
   }).finally(() => { btn.disabled = false; btn.textContent = '새 목록 뽑기'; });
