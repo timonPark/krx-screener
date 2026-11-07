@@ -5,7 +5,7 @@ export default tseslint.config(
   { ignores: ['frontend/dist/', 'node_modules/'] },
   ...tseslint.configs.recommended,
   {
-    files: ['frontend/src/**/*.ts'],
+    files: ['frontend/src/**/*.ts', 'tests/browser/**/*.ts'],
     rules: {
       // 변수: const a: number = 1. 구조 분해(배열·객체)도 대상이다.
       // 함수를 담는 변수(const f = (x: number): string => …)는 아래 반환값 규칙과 매개변수 규칙이 타입을 요구하므로 변수 자체의 타입은 생략한다.

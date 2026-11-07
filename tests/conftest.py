@@ -34,7 +34,7 @@ def frontend_dist() -> Path:
     """
     tsc = ROOT / "node_modules" / ".bin" / "tsc"
     if shutil.which("node") is None or not tsc.exists():
-        pytest.skip("화면을 빌드할 수 없음: 저장소 폴더에서 `npm ci` 를 먼저 실행하세요 (Node 22 이상)")
+        pytest.skip("화면을 빌드할 수 없음: 저장소 폴더에서 `npm ci` 를 먼저 실행하세요 (Node 22.18 이상)")
     result = subprocess.run([str(tsc), "-p", "tsconfig.json"], cwd=ROOT, capture_output=True, text=True, timeout=300)
     assert result.returncode == 0, f"화면 빌드 실패:\n{result.stdout}{result.stderr}"
     return ROOT / "frontend" / "dist"

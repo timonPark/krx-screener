@@ -3,7 +3,7 @@
 헤드리스 Chrome 을 CDP 로 구동한다 (`tests/browser/`). 서버는 실제 백엔드 + 테스트 PostgreSQL + 실제 `frontend/` 이고
 시세·수급·분석 서버만 가짜다 (`tests/browser_harness.py`). 서버 안의 가짜는 `POST /__ctl` 로 실행 중에 조작한다.
 
-Node 22 이상, Chrome(macOS 기본 경로 또는 환경변수 `KRX_SCREENER_CHROME`), 테스트 DB 가 모두 있어야 돈다. 없으면 건너뛴다.
+Node 22.18 이상(`.ts` 를 타입 지우고 바로 실행), Chrome(macOS 기본 경로 또는 환경변수 `KRX_SCREENER_CHROME`), 테스트 DB 가 모두 있어야 돈다. 없으면 건너뛴다.
 화면의 규칙(오류 알림이 사라지는 때, 정리 막힘, 진행 표시)을 `app.js` 가 실제로 연결했는지는 여기서만 지켜진다.
 """
 
@@ -17,7 +17,6 @@ from pathlib import Path
 
 import pytest
 from browser_harness import BrowserServer
-from test_frontend_contract import _node_major  # 같은 Node 확인
 
 BROWSER = Path(__file__).resolve().parent / "browser"
 MAC_CHROME = Path("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome")
@@ -30,8 +29,22 @@ def _chrome() -> str | None:
     return str(MAC_CHROME) if MAC_CHROME.exists() else None
 
 
+def _node_version() -> tuple[int, int]:
+    """(주, 부) 버전. Node 가 없거나 읽지 못하면 (0, 0)."""
+    node = shutil.which("node")
+    if not node:
+        return (0, 0)
+    try:
+        out = subprocess.run([node, "--version"], capture_output=True, text=True, timeout=10, check=True).stdout
+        major, minor, *_ = out.strip().lstrip("v").split(".")
+        return (int(major), int(minor))
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return (0, 0)
+
+
+# `.ts` 를 바로 실행하는 타입 제거(type stripping)는 22.18 부터 기본으로 켜져 있다
 pytestmark = pytest.mark.skipif(
-    _node_major() < 22 or _chrome() is None, reason="Node 22 이상과 Chrome(KRX_SCREENER_CHROME)이 필요함"
+    _node_version() < (22, 18) or _chrome() is None, reason="Node 22.18 이상과 Chrome(KRX_SCREENER_CHROME)이 필요함"
 )
 
 
@@ -56,7 +69,7 @@ def scenario(server, tmp_path):
     def run(name: str) -> dict:
         result = subprocess.run(
             [
-                shutil.which("node"), str(BROWSER / "scenarios.mjs"), name, server.url, str(_free_port()),
+                shutil.which("node"), str(BROWSER / "scenarios.ts"), name, server.url, str(_free_port()),
                 str(tmp_path / f"chrome-{name}"),
             ],
             capture_output=True, text=True, timeout=180, env={**os.environ, "KRX_SCREENER_CHROME": _chrome()},
