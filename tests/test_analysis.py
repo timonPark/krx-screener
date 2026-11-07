@@ -52,10 +52,14 @@ def test_rating_label_and_server_code_rule():
 class FakeClient:
     """snapshot 을 미리 정한 순서대로 돌려주는 가짜 클라이언트."""
 
-    def __init__(self, snapshots, start_error=None):
+    def __init__(self, snapshots, start_error=None, running=None):
         self.snapshots = list(snapshots)
         self.start_error = start_error
         self.started: list[tuple] = []
+        self.running = running  # 서버에 이미 도는 분석이 있으면 그 run_id (#70)
+
+    def find_running(self, ticker, trade_date):
+        return self.running
 
     def start(self, ticker, trade_date, effort):
         if self.start_error:

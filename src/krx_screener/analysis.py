@@ -5,11 +5,14 @@ TradingAgents-KR 는 별도 프로세스(로컬 서버)이고 HTTP API 로만 �
 - ``GET  /api/health``        서버 확인
 - ``POST /api/runs``          분석 시작 → 201 + ``run_id`` (종목코드는 ``^\\d{6}$`` 만 허용)
 - ``GET  /api/runs/{run_id}`` 상태 스냅샷 (``pending``/``running``/``done``/``error``, ``decision``)
+- ``GET  /api/runs?limit=N``  최근 분석 목록 (종목·기준일·상태·생성 시각). 같은 종목·기준일의 분석이 아직 도는지 볼 때 쓴다
 - ``GET  /api/runs/{run_id}/events`` 진행 이벤트 (SSE). 보고서 번호는 여기의 ``report_saved`` 이벤트에만 있다
 
 주의:
 - 종목 하나의 분석이 몇 분 걸리고 Max 플랜 쿼터를 쓴다. 호출하는 쪽(CLI)이 개수를 제한하고 확인한다.
 - 서버에는 취소 API 가 없다. 시간 초과로 기다리기를 멈춰도 서버에서는 계속 돌 수 있다.
+  같은 종목을 다시 보내면 서버는 거절하지 않고 새 분석을 하나 더 시작해서 쿼터를 한 번 더 쓴다 (2026-11-07 실제 서버로 확인, #70).
+  그래서 보내기 전에 같은 종목·기준일의 분석이 아직 도는지 보고, 돌고 있으면 새로 보내지 않고 그 분석을 이어서 기다린다 (``run_one``).
 - ``run_id`` 상태는 서버 메모리에만 있다. 서버가 재시작되면 404 가 된다.
 - 보고서 번호(``report_id``, 예: ``028050_20261106_172435``)는 상태 스냅샷에 없다. 서버는 보고서를 저장한 직후 ``report_saved``
   이벤트를 내고 그 다음에 ``done`` 을 내므로, 분석이 끝난 뒤 이벤트를 다시 읽으면(서버가 처음부터 되풀이해 준다) 항상 있다.
@@ -41,6 +44,9 @@ TARGET_RATINGS = frozenset({"Buy", "Overweight"})  # 우리가 모아 보여줄 
 REVIEW = "REVIEW"  # 서버가 등급을 읽지 못한 경우 (사람이 확인)
 
 DONE, FAILED, TIMEOUT, SKIPPED = "done", "error", "timeout", "skipped"
+
+RUN_LIST_LIMIT = 20  # 서버가 기본으로 주는 개수. 도는 분석은 늘 최근이라 이만큼이면 된다 (응답에 보고서 본문이 들어 있어 무겁다)
+RUNNING_STATES = frozenset({"pending", "running"})  # 서버가 아직 끝내지 않은 분석
 
 _SERVER_CODE_RE = re.compile(r"^\d{6}$")
 _REPORT_ID_RE = re.compile(r"^\d{6}_\d{8}_\d{6}$")  # 서버의 보고서 폴더 이름: 종목코드_저장일_저장시각
@@ -136,6 +142,37 @@ class AnalysisClient:
             raise AnalysisError("분석 시작 응답에 run_id 가 없습니다.")
         return run_id
 
+    def find_running(self, ticker: str, trade_date: str) -> str | None:
+        """서버에 같은 종목·기준일의 아직 도는 분석(``pending``/``running``)이 있으면 그 ``run_id``, 없으면 None.
+
+        여럿이면 가장 먼저 시작한 것(끝에 가장 가깝다). 목록을 읽지 못하면(목록 주소가 없는 서버 버전, 오류 응답, 연결 실패 등)
+        확인할 수 없는 것이므로 None 으로 돌려주고 경고만 남긴다: 이 확인 때문에 분석 자체가 막히지는 않는다.
+        """
+        try:
+            resp = self._call("GET", f"/api/runs?limit={RUN_LIST_LIMIT}")
+            if resp.status_code != 200:
+                raise AnalysisError(f"분석 목록 조회 실패 (HTTP {resp.status_code})")
+            runs = resp.json()
+        except (AnalysisError, ValueError) as exc:
+            logger.warning("서버의 분석 목록을 읽지 못해 이미 도는 분석이 있는지 확인하지 못했습니다 (%s): %s", ticker, exc)
+            return None
+        if not isinstance(runs, list):
+            logger.warning("서버의 분석 목록 모양이 예상과 다릅니다 (%s)", ticker)
+            return None
+        running = [
+            run
+            for run in runs
+            if isinstance(run, dict)
+            and run.get("ticker") == ticker
+            and run.get("trade_date") == trade_date
+            and run.get("status") in RUNNING_STATES
+            and isinstance(run.get("run_id"), str)
+            and run["run_id"]
+        ]
+        if not running:
+            return None
+        return min(running, key=lambda run: str(run.get("created_at", "")))["run_id"]
+
     def snapshot(self, run_id: str) -> dict[str, Any]:
         resp = self._call("GET", f"/api/runs/{run_id}")
         if resp.status_code == 404:
@@ -210,10 +247,16 @@ def run_one(
         return skipped_outcome(code, name)
 
     started = clock()
-    try:
-        run_id = client.start(code, trade_date, effort)
-    except AnalysisError as exc:
-        return AnalysisOutcome(code, name, FAILED, elapsed_seconds=clock() - started, message=str(exc))
+    # 서버에서 같은 종목·기준일의 분석이 아직 돌고 있으면(앞서 시간 초과로 기다리기를 멈춘 분석 등) 새로 보내지 않고 이어서 기다린다.
+    # 새로 보내면 서버가 거절하지 않고 분석을 하나 더 시작해서 쿼터를 한 번 더 쓰고, 먼저 끝난 분석의 결과는 버려진다 (#70).
+    run_id = client.find_running(code, trade_date)
+    if run_id:
+        logger.info("서버에서 이미 도는 분석을 이어서 기다립니다 (%s, %s)", code, trade_date)
+    else:
+        try:
+            run_id = client.start(code, trade_date, effort)
+        except AnalysisError as exc:
+            return AnalysisOutcome(code, name, FAILED, elapsed_seconds=clock() - started, message=str(exc))
 
     while True:
         try:

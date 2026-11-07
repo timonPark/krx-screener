@@ -99,14 +99,26 @@ class FakeAnalysisServer:
         self.health_error = health_error
         self.started: list[tuple[str, str, str]] = []  # (종목코드, 기준일, effort)
         self._polls: dict[str, int] = {}
+        # 아직 끝나지 않은 분석 (종목코드, 기준일) → run_id. 실제 서버처럼 같은 종목을 또 보내도 거절하지 않고 새 분석을 시작한다 (#70)
+        self._running: dict[tuple[str, str], str] = {}
 
     def check_health(self) -> None:
         if self.health_error:
             raise AnalysisError(self.health_error)
 
+    def running_since(self, ticker: str, trade_date: str) -> str:
+        """앞서 시작해서 아직 도는 분석이 서버에 있는 상황을 만든다 (예: 시간 초과로 기다리기를 멈춘 분석). 그 run_id 를 돌려준다."""
+        self._dates[ticker] = trade_date
+        self._running[(ticker, trade_date)] = f"run-{ticker}"
+        return f"run-{ticker}"
+
+    def find_running(self, ticker: str, trade_date: str) -> str | None:
+        return self._running.get((ticker, trade_date))
+
     def start(self, ticker: str, trade_date: str, effort: str) -> str:
         self.started.append((ticker, trade_date, effort))
         self._dates[ticker] = trade_date
+        self._running[(ticker, trade_date)] = f"run-{ticker}"
         return f"run-{ticker}"
 
     def report_id(self, run_id: str) -> str | None:
@@ -121,6 +133,7 @@ class FakeAnalysisServer:
         self._polls[code] = seen + 1
         if seen < self.polls_before_done:
             return {"status": "running"}
+        self._running.pop((code, self._dates.get(code, "")), None)  # 끝났다 (오류든 완료든)
         if code in self.errors:
             return {"status": "error", "error": "가짜 서버 오류"}
         if self.state_log_root is not None:  # 서버는 분석을 마치면서 상태 로그를 쓴다 (같은 종목·기준일이면 덮어쓴다)
