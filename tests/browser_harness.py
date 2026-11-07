@@ -178,7 +178,11 @@ class BrowserServer:
 
     async def _config_js(self, request: Request) -> PlainTextResponse:
         text = (FRONTEND / "dist" / "config.js").read_text(encoding="utf-8")
-        for old, new in (("pollMs: 10_000", "pollMs: 400"), ("buildPollMs: 2_000", "buildPollMs: 250")):
+        for old, new in (
+            ("pollMs: 10_000", "pollMs: 400"),
+            ("buildPollMs: 2_000", "buildPollMs: 250"),
+            ("idlePollMs: 30_000", "idlePollMs: 1500"),
+        ):
             assert old in text, f"dist/config.js 에 {old} 가 없다 — 테스트의 갱신 간격 바꾸기를 고친다"
             text = text.replace(old, new)
         return PlainTextResponse(text, media_type="text/javascript")

@@ -152,3 +152,21 @@ def test_the_mock_mode_runs_without_a_backend_and_builds_a_new_list(scenario):
     assert facts["first"]["filter"].startswith("20일 평균 거래대금 10억↑")
     assert facts["building"] == "목록을 만드는 중입니다"
     assert facts["ready"]["total"] == "14" and facts["ready"]["session"].startswith("2026-11-04")
+
+
+def test_an_idle_screen_notices_a_process_started_elsewhere_without_a_reload(scenario):
+    facts = scenario("startedElsewhere")
+    assert facts["idleBefore"]["start"] is False and "마지막 갱신" in facts["idleBefore"]["poll"]
+    assert "초마다 확인" in facts["idleBefore"]["poll"]  # 쉬는 중에도 가끔 확인한다고 알린다
+    assert facts["started"] == 202  # 화면 밖(API)에서 시작했다
+    noticed = facts["noticed"]
+    assert noticed["poll"].startswith("처리 중") and noticed["startDisabled"] and noticed["offsetDisabled"]  # 새로고침 없이 처리 중으로
+    assert facts["afterFirst"] == {"done": "2", "start": "처리 시작"}
+    assert facts["afterSecond"]["done"] == "3"  # 끝난 뒤에도 쉬는 중 확인으로 돌아가서 다음 처리도 알아챘다
+
+
+def test_a_hidden_tab_stops_the_idle_check_and_a_shown_tab_checks_at_once(scenario):
+    facts = scenario("hiddenTab")
+    assert facts["visibleGrowth"] >= 2  # 보이는 동안은 쉬는 중에도 조회한다
+    assert facts["hiddenGrowth"] == 0  # 숨겨진 탭은 조회하지 않는다
+    assert facts["shownGrowth"] >= 1  # 다시 보이면 바로 한 번 조회한다
