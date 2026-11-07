@@ -170,17 +170,24 @@ GET https://stock.naver.com/api/domestic/detail/{종목코드}/detail?codeType=K
 
 | 설계 | 주소 | 구현 (`src/krx_screener/`) |
 |---|---|---|
-| 1 목록 뽑기 | `POST /api/sessions`, `GET /api/sessions` | `routes_sessions.py`, `listing.py` |
+| 1 목록 뽑기 | `POST /api/sessions`, `GET /api/sessions` | `routes_sessions.py`, `session_build.py`, `listing.py` |
 | 2 나눠서 처리 | `POST /api/sessions/{id}/process` | `routes_sessions.py`, `processing.py`, `analysis.py` |
 | 6 평가점수 | (처리 안에서 계산) | `agent_ratings.py`(에이전트별 등급 읽기), `scoring.py` |
 | 3 조회 | `GET /api/sessions/{id}` (`id` 자리에 `latest` 가능) | `routes_sessions.py` |
 | 4 정리 | `POST /api/sessions/{id}/organize` | `routes_sessions.py`, `repository.py` |
 | 상태 확인 | `GET /api/health` | `api.py` |
-| 저장 | PostgreSQL (스키마 v2) | `db.py`, `repository.py` |
+| 저장 | PostgreSQL (스키마 v3) | `db.py`, `repository.py` |
 | 화면 | `krx-screener serve` → `/` | `server.py`, `frontend/` |
 | 명령줄 분석 대기열 | `run`·`analyze`·`list` | `analysis_queue.py`, `cli.py` |
 
 설계와 다르거나 설계에 없던 결정 (자세한 이유는 `work_history/` 의 해당 기록):
+
+- **목록은 뒤에서 만들고 진행을 저장한다 (#56).** `POST /api/sessions` 는 기준일을 확인한 뒤 빈 세션(`build.state = "building"`)을 만들어 `202` 로 바로 답하고, 시세 → 수급 → 업종·기업 설명을 백그라운드에서 만든다.
+  진행(`build.stage`, `done`, `total`)은 DB 의 세션 행에 적는다(2초에 한 번, 단계가 바뀔 때·끝날 때는 언제나). 서버를 여러 개 띄워도, 서버를 다시 켜도 같은 값을 읽는다.
+  - 상태는 `building` → `ready`(끝) / `failed`(오류, `build.error` 에 한국어 이유)이고, `building` 인데 만드는 잠금(어드바이저리 잠금)이 없으면 서버가 죽은 것이라 응답에서 `interrupted`(중단됨)로 바꿔 준다.
+  - 같은 기준일을 이미 만드는 중이면 `409 {"detail": …, "session_id": …}`. 잠금을 먼저 잡고 행을 넣으며, 부분 유일 인덱스(`sessions_building_as_of_idx`)가 한 번 더 막는다.
+  - 같은 기준일을 다시 뽑으면 못 끝낸 목록(실패·중단)은 지우고 새로 만든다. 만드는 중인 목록에는 처리(`process`)·정리(`organize`)가 `409` 다.
+  - 종목 저장이 실패하면 이전과 달리 세션이 `failed` 로 남는다 (이전에는 세션이 남지 않았다).
 
 - **점수가 없는 종목은 순위에서 뺀다.** 끝났지만 에이전트 등급을 하나도 읽지 못한 종목은 점수를 0으로 지어내지 않고 순위를 비운다. 정리 응답의 `unscored` 가 그 개수다 (8장, `2026-11-07-24-organize-api.md`).
 - **정리도 처리 잠금을 쥔다.** 처리 중인 세션은 정리하지 않는다 (같은 문서).

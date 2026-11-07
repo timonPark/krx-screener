@@ -15,7 +15,7 @@ from typing import Any
 
 import pytest
 
-from krx_screener.routes_sessions import CountsOut, ItemOut, SessionDetailOut, SessionOut
+from krx_screener.routes_sessions import BuildOut, CountsOut, ItemOut, SessionDetailOut, SessionOut
 
 FRONTEND = Path(__file__).resolve().parents[1] / "frontend"
 REPORT_ID = re.compile(r"^\d{6}_\d{8}_\d{6}$")  # 028050_20261106_172435
@@ -104,6 +104,7 @@ def test_the_mock_answers_have_exactly_the_keys_of_the_backend_models():
     detail = got["detail"]
     assert set(detail) == set(SessionDetailOut.model_fields)
     assert set(detail["session"]) == set(SessionOut.model_fields)
+    assert set(detail["session"]["build"]) == set(BuildOut.model_fields)  # 목록을 만드는 중의 상태 (#56)
     assert set(detail["counts"]) == set(CountsOut.model_fields)
     assert set(got["list"][0]) == set(SessionOut.model_fields)
     for item in detail["items"]:
@@ -274,3 +275,90 @@ def test_the_mock_items_not_yet_analyzed_look_like_the_backends():
         assert (item["score"], item["agents_rated"], item["agents_total"], item["rank"]) == (None, 0, 0, None)
     for item in (i for i in detail["items"] if i["state"] == "done"):
         assert item["agents_total"] == 10  # 끝난 종목은 에이전트 10개 기준
+
+
+# --- 새 목록을 뒤에서 만든다 (#56): 예시 모드도 백엔드처럼 바로 응답하고 진행을 보여 준다 ---
+
+
+@needs_node
+def test_a_new_mock_list_answers_at_once_then_goes_through_the_stages_and_becomes_ready():
+    got = run_js(
+        MOCK
+        + """
+config.mockBuildMs = 600;
+const created = await api.createSession('2026-11-04');
+const stages = new Set();
+let last = null;
+for (let i = 0; i < 100; i++) {
+  last = await api.getSession(created.id);
+  stages.add(last.session.build.stage + ':' + last.session.build.state);
+  if (last.session.build.state === 'ready') break;
+}
+console.log(JSON.stringify({ created, stages: [...stages], last }));
+process.exit(0);
+"""
+    )
+    assert (got["created"]["total"], got["created"]["build"]["state"]) == (0, "building")  # 응답은 만들기를 시작한 세션
+    assert "prices:building" in got["stages"] or any(x.endswith(":building") for x in got["stages"])  # 만드는 중의 단계를 거친다
+    assert any(x.endswith(":building") for x in got["stages"])
+    last = got["last"]
+    assert last["session"]["build"]["state"] == "ready" and last["session"]["total"] == len(last["items"]) > 0
+    assert last["session"]["build"]["done"] == last["session"]["build"]["total"] == last["session"]["total"]
+
+
+@needs_node
+def test_the_mock_progress_has_the_backends_shape_while_building():
+    got = run_js(
+        MOCK
+        + """
+config.mockBuildMs = 3000;
+const created = await api.createSession('2026-11-04');
+const detail = await api.getSession(created.id);
+const list = await api.listSessions();
+console.log(JSON.stringify({ detail, list }));
+process.exit(0);
+"""
+    )
+    build = got["detail"]["session"]["build"]
+    assert set(build) == set(BuildOut.model_fields) and build["state"] == "building"
+    assert build["stage"] in {"prices", "flow", "sector"} and 0 <= build["done"] <= max(build["total"], 0)
+    assert got["detail"]["items"] == [] and got["detail"]["counts"] == {"pending": 0, "running": 0, "done": 0, "failed": 0}
+    assert got["list"][0]["build"]["state"] == "building"  # 목록에도 보인다
+
+
+@needs_node
+def test_asking_again_for_a_date_being_built_is_a_409_with_the_running_session():
+    got = run_js(
+        MOCK
+        + """
+config.mockBuildMs = 3000;
+const first = await api.createSession('2026-11-04');
+let error = null;
+try { await api.createSession('2026-11-04'); } catch (e) { error = { status: e.status, body: e.body }; }
+const other = await api.createSession('2026-11-03');   // 다른 기준일은 같이 만들 수 있다
+console.log(JSON.stringify({ first, error, other }));
+process.exit(0);
+"""
+    )
+    assert got["error"]["status"] == 409 and got["error"]["body"]["session_id"] == got["first"]["id"]
+    assert got["error"]["body"]["detail"] == "이미 2026-11-04 목록을 뽑는 중입니다."  # 백엔드와 같은 문구
+    assert got["other"]["build"]["state"] == "building"
+
+
+@needs_node
+def test_a_mock_list_that_is_being_built_cannot_be_processed_or_organized():
+    got = run_js(
+        MOCK
+        + """
+config.mockBuildMs = 3000;
+await api.createSession('2026-11-04');
+const out = {};
+for (const [name, call] of [['process', () => api.process('latest', 0, 1)], ['organize', () => api.organize('latest')]]) {
+  try { await call(); out[name] = null; } catch (e) { out[name] = { status: e.status, body: e.body }; }
+}
+console.log(JSON.stringify(out));
+process.exit(0);
+"""
+    )
+    assert got["process"] == {"status": 409, "body": {"detail": "목록을 만드는 중입니다. 끝난 뒤에 처리할 수 있습니다."}}
+    assert got["organize"] == {"status": 409, "body": {"detail": "목록을 만드는 중입니다. 끝난 뒤에 정리할 수 있습니다.", "remaining": 0}}

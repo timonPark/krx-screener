@@ -32,6 +32,12 @@ class Session:
     ranked_at: datetime | None
     total: int  # 세션 안의 종목 수 (보관한 종목은 세지 않는다)
     source: str = "web"  # web = 웹 화면이 만든 세션, cli = 명령줄 분석 대기열
+    # 목록을 만드는 중의 상태 (#56). 완성된 세션은 build_state = ready
+    build_state: str = "ready"  # building | ready | failed (중단됨은 저장하지 않고 effective_build_state 가 계산한다)
+    build_stage: str = ""  # prices | flow | sector | 빈 문자열
+    build_done: int = 0
+    build_total: int = 0
+    build_error: str = ""
 
 
 @dataclass(frozen=True)
@@ -82,6 +88,7 @@ _LISTED = (
 _ITEM_COLUMNS = ", ".join(f.name for f in fields(Item))
 _SESSION_SQL = (
     "SELECT s.id, s.as_of, s.created_at, s.ranked_at, s.source, "
+    "s.build_state, s.build_stage, s.build_done, s.build_total, s.build_error, "
     "(SELECT count(*) FROM session_items i WHERE i.session_id = s.id AND NOT i.archived) AS total "
     "FROM sessions s"
 )
@@ -103,6 +110,69 @@ class SessionRepository:
         session = self.get_session(session_id)
         assert session is not None
         return session
+
+    # --- 목록을 만드는 중인 세션 (#56) ---
+
+    def create_building_session(self, session_id: uuid.UUID, as_of: date) -> Session:
+        """종목이 없는 채로 만드는 중(building)인 세션을 만든다. 같은 기준일에 이미 만드는 중이면 ``UniqueViolation``.
+
+        ``session_id`` 는 부르는 쪽이 정한다: 세션이 보이기 **전에** 그 id 의 처리 잠금을 먼저 쥐어 두어야 다른 요청이 잠금 없는
+        만들기(=중단됨)로 오해해 지우지 않는다.
+        """
+        self._conn.execute(
+            "INSERT INTO sessions (id, as_of, build_state) VALUES (%s, %s, 'building')", (session_id, as_of)
+        )
+        session = self.get_session(session_id)
+        assert session is not None
+        return session
+
+    def set_build_progress(self, session_id: uuid.UUID, stage: str, done: int, total: int) -> None:
+        self._conn.execute(
+            "UPDATE sessions SET build_stage = %s, build_done = %s, build_total = %s WHERE id = %s",
+            (stage, done, total, session_id),
+        )
+
+    def finish_build(self, session_id: uuid.UUID, items: Sequence[Item]) -> None:
+        """종목을 저장하고 완성(ready)으로 바꾼다. 한 트랜잭션이라 저장이 실패하면 둘 다 반영되지 않는다."""
+        with self._conn.transaction():
+            self.add_items(session_id, items)
+            self._conn.execute(
+                "UPDATE sessions SET build_state = 'ready', build_stage = '', build_done = %s, build_total = %s WHERE id = %s",
+                (len(items), len(items), session_id),
+            )
+
+    def fail_build(self, session_id: uuid.UUID, message: str) -> None:
+        self._conn.execute(
+            "UPDATE sessions SET build_state = 'failed', build_stage = '', build_error = %s WHERE id = %s",
+            (message, session_id),
+        )
+
+    def building_session_id(self, as_of: date) -> uuid.UUID | None:
+        """그 기준일 목록을 만드는 중인 웹 세션의 id (없으면 None)."""
+        row = self._conn.execute(
+            "SELECT id FROM sessions WHERE as_of = %s AND source = 'web' AND build_state = 'building'", (as_of,)
+        ).fetchone()
+        return row[0] if row else None
+
+    def discard_unfinished(self, as_of: date) -> int:
+        """그 기준일의 못 끝낸 웹 세션(실패, 중단됨)을 지운다. 지금 만드는 중인 것과 완성된 것은 지우지 않는다."""
+        rows = self._conn.execute(
+            "SELECT id, build_state FROM sessions WHERE as_of = %s AND source = 'web' AND build_state IN ('building', 'failed')",
+            (as_of,),
+        ).fetchall()
+        removed = 0
+        for session_id, state in rows:
+            if state == "building" and self.is_locked(session_id):
+                continue  # 만드는 연결이 잠금을 쥐고 있다 = 살아 있다
+            self._conn.execute("DELETE FROM sessions WHERE id = %s", (session_id,))
+            removed += 1
+        return removed
+
+    def effective_build_state(self, session: Session) -> str:
+        """만들기 상태. 만드는 중(building)인데 만드는 잠금이 없으면 서버가 중간에 죽은 것이라 ``interrupted`` 다."""
+        if session.build_state == "building" and not self.is_locked(session.id):
+            return "interrupted"
+        return session.build_state
 
     def get_session(self, session_id: uuid.UUID) -> Session | None:
         with self._cursor() as cur:

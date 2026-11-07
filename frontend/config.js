@@ -4,6 +4,8 @@ export const config = {
   apiBase: '',
   // 처리 중일 때 조회를 다시 부르는 간격(ms)
   pollMs: 10_000,
+  // 목록을 만드는 중일 때 조회를 다시 부르는 간격(ms). 진행 숫자가 자주 바뀌어서 처리 중보다 짧다
+  buildPollMs: 2_000,
   // TradingAgents-KR 보고서 화면 주소. {report_id} 가 보고서 번호(예: 028050_20261106_172435)로 바뀐다.
   // null 이면 보고서 번호를 링크 없이 글자로만 보여준다. 예:
   //   'http://localhost:4321/report?id={report_id}'                                   (TradingAgents-KR 웹 화면, `npm run dev`)
@@ -16,4 +18,7 @@ export const config = {
   // mock 모드에서 종목 하나를 처리하는 데 걸리는 시간(ms)과 조회 간격
   mockMsPerItem: 3_000,
   mockPollMs: 1_000,
+  // mock 모드에서 새 목록을 만드는 데 걸리는 시간(ms)과 그동안의 조회 간격
+  mockBuildMs: 6_000,
+  mockBuildPollMs: 500,
 };

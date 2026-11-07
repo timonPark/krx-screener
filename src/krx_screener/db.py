@@ -109,6 +109,24 @@ MIGRATIONS: list[tuple[int, str, str]] = [
             CHECK (elapsed_seconds IS NULL OR elapsed_seconds >= 0);
         """,
     ),
+    (
+        3,
+        "목록 만들기 진행: 세션의 만들기 상태(build_state)와 진행 숫자",
+        """
+        -- 새 목록은 세션을 먼저 만들고(building) 뒤에서 종목을 채운다. 기존 세션은 모두 완성된 것(ready)이다.
+        -- '중단됨'(만들던 서버가 죽음)은 저장하지 않고 만드는 잠금이 없는 building 으로 계산한다.
+        ALTER TABLE sessions ADD COLUMN build_state text NOT NULL DEFAULT 'ready'
+            CHECK (build_state IN ('building', 'ready', 'failed'));
+        ALTER TABLE sessions ADD COLUMN build_stage text NOT NULL DEFAULT '';      -- prices | flow | sector | ''
+        ALTER TABLE sessions ADD COLUMN build_done integer NOT NULL DEFAULT 0 CHECK (build_done >= 0);
+        ALTER TABLE sessions ADD COLUMN build_total integer NOT NULL DEFAULT 0 CHECK (build_total >= 0);
+        ALTER TABLE sessions ADD COLUMN build_error text NOT NULL DEFAULT '';
+
+        -- 같은 기준일 목록을 동시에 두 번 만들지 못하게 한다 (웹 세션만, 명령줄 대기열은 상관없다)
+        CREATE UNIQUE INDEX sessions_building_as_of_idx ON sessions (as_of)
+            WHERE build_state = 'building' AND source = 'web';
+        """,
+    ),
 ]
 
 

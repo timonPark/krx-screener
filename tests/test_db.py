@@ -112,7 +112,7 @@ def _item(conn, sid, seq=1, code="028050", **extra):
 
 @needs_db
 def test_init_creates_the_schema_on_an_empty_database(conn):
-    assert db.init_schema(conn) == [1, 2]
+    assert db.init_schema(conn) == [1, 2, 3]
     assert {"sessions", "session_items", "item_agent_ratings", "schema_migrations"} <= _tables(conn)
 
 
@@ -121,13 +121,16 @@ def test_init_is_safe_to_repeat(conn):
     db.init_schema(conn)
     assert db.init_schema(conn) == []
     versions = [r[0] for r in conn.execute("SELECT version FROM schema_migrations ORDER BY version")]
-    assert versions == [1, 2]
+    assert versions == [1, 2, 3]
 
 
 @needs_db
 def test_tables_hold_everything_the_api_contract_needs(conn):
     db.init_schema(conn)
-    assert _columns(conn, "sessions") == {"id", "as_of", "created_at", "ranked_at", "source"}
+    assert _columns(conn, "sessions") == {
+        "id", "as_of", "created_at", "ranked_at", "source",
+        "build_state", "build_stage", "build_done", "build_total", "build_error",
+    }
     assert {
         "session_id", "seq", "code", "name", "market", "close", "avg_trading_value", "rsi",
         "flow_status", "foreign_net_5d", "institution_net_5d", "sector_code", "sector_name",
@@ -251,3 +254,29 @@ def test_cli_init_creates_the_schema(monkeypatch, capsys, conn):
     assert "스키마를 만들었습니다" in capsys.readouterr().out
     assert db.main(["init"]) == 0
     assert "이미 최신" in capsys.readouterr().out
+
+
+@needs_db
+def test_sessions_are_ready_by_default_so_existing_ones_stay_valid(conn):
+    db.init_schema(conn)
+    sid = _session(conn)
+    row = conn.execute("SELECT build_state, build_stage, build_done, build_total, build_error FROM sessions WHERE id = %s", (sid,)).fetchone()
+    assert row == ("ready", "", 0, 0, "")
+
+
+@needs_db
+def test_only_one_session_per_date_can_be_building_at_a_time(conn):
+    db.init_schema(conn)
+    conn.execute("INSERT INTO sessions (id, as_of, build_state) VALUES (gen_random_uuid(), '2026-11-05', 'building')")
+    with pytest.raises(psycopg.errors.UniqueViolation):
+        conn.execute("INSERT INTO sessions (id, as_of, build_state) VALUES (gen_random_uuid(), '2026-11-05', 'building')")
+    conn.execute("INSERT INTO sessions (id, as_of, build_state) VALUES (gen_random_uuid(), '2026-11-04', 'building')")  # 다른 기준일
+    _session(conn)  # 같은 기준일의 완성된 세션은 여러 개여도 된다
+    _session(conn)
+
+
+@needs_db
+def test_an_unknown_build_state_is_rejected(conn):
+    db.init_schema(conn)
+    with pytest.raises(psycopg.errors.CheckViolation):
+        conn.execute("INSERT INTO sessions (id, as_of, build_state) VALUES (gen_random_uuid(), '2026-11-05', 'interrupted')")  # 중단됨은 저장하지 않고 계산한다

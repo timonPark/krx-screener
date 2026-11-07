@@ -49,6 +49,7 @@ class Dependencies:
     retry_wait: float = 0.5  # 외부 시세 조회를 재시도하기 전에 기다리는 초
     workers: int = 8  # 종목 시세를 동시에 조회하는 수
     frontend_dir: Path | None = None  # 화면 폴더. None 이면 API 만 서빙한다
+    progress_interval: float = 2.0  # 목록을 만드는 진행을 DB 에 적는 최소 간격(초). 테스트는 0 으로 두어 매번 적는다
 
 
 def create_app(deps: Dependencies) -> FastAPI:

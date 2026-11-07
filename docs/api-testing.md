@@ -75,7 +75,7 @@ write_state_log(
 def test_health_reports_the_schema_version_and_the_db_agrees(client, pg_conn):
     response = client.get("/api/health")
     assert response.status_code == 200
-    assert response.json() == {"status": "ok", "db": "ok", "schema_version": 2}
+    assert response.json() == {"status": "ok", "db": "ok", "schema_version": 3}
     assert pg_conn.execute("SELECT max(version) FROM schema_migrations").fetchone()[0] == 2
 ```
 

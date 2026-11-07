@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date
 from pathlib import Path
@@ -27,9 +28,15 @@ from krx_screener.externals import Externals
 from krx_screener.flow import fetch_flow
 from krx_screener.prices import PriceStore
 from krx_screener.repository import Item
-from krx_screener.screen import lookback_days, run_screen
+from krx_screener.screen import lookback_days, map_with_progress, run_screen
 
 logger = logging.getLogger(__name__)
+
+Progress = Callable[[str, int, int], None]  # (단계, 한 개수, 전체 개수)
+
+
+def _no_progress(stage: str, done: int, total: int) -> None:
+    pass
 
 
 def _to_item(seq: int, row: dict[str, Any]) -> Item:
@@ -47,19 +54,22 @@ def _to_item(seq: int, row: dict[str, Any]) -> Item:
 
 
 def _apply_flow(
-    items: list[Item], externals: Externals, config: Config, as_of: date, workers: int, retry_wait: float
+    items: list[Item], externals: Externals, config: Config, as_of: date, workers: int, retry_wait: float,
+    progress: Progress | None = None,
 ) -> None:
     """종목마다 수급 상태와 순매수 합계를 채운다. 읽지 못하면 ``unconfirmed`` 이고 합계는 빈 값이다.
 
     설정의 ``flow.mode`` 와 상관없이 종목을 거르지 않는다 (스펙: 수급은 표시만 한다).
     """
     window = config.flow.window_days
+    report = progress or _no_progress
+    report("flow", 0, len(items))
     with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
-        readings = list(
-            pool.map(
-                lambda it: fetch_flow(it.code, as_of, window, externals.trend, retry_wait=retry_wait),
-                items,
-            )
+        readings = map_with_progress(
+            pool,
+            lambda it: fetch_flow(it.code, as_of, window, externals.trend, retry_wait=retry_wait),
+            items,
+            lambda done, total: report("flow", done, total),
         )
     for item, reading in zip(items, readings, strict=True):
         item.flow_status = reading.status
@@ -76,10 +86,14 @@ def _read_sector(externals: Externals, code: str):
         return None
 
 
-def _apply_sector(items: list[Item], externals: Externals, workers: int) -> None:
+def _apply_sector(items: list[Item], externals: Externals, workers: int, progress: Progress | None = None) -> None:
     """종목마다 업종 코드·업종명·기업 설명을 채운다. 읽지 못한 종목은 세 값 모두 빈 칸이다."""
+    report = progress or _no_progress
+    report("sector", 0, len(items))
     with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
-        infos = list(pool.map(lambda it: _read_sector(externals, it.code), items))
+        infos = map_with_progress(
+            pool, lambda it: _read_sector(externals, it.code), items, lambda done, total: report("sector", done, total)
+        )
     for item, info in zip(items, infos, strict=True):
         if info is not None:
             item.sector_code = info.code
@@ -96,8 +110,15 @@ def build_items(
     workers: int = 8,
     cache_dir: Path | None = None,
     retry_wait: float = 0.5,
+    progress: Progress | None = None,
 ) -> list[Item]:
-    """기준일의 목록을 순번 순서의 종목들로 돌려준다 (저장은 호출하는 쪽이 한다)."""
+    """기준일의 목록을 순번 순서의 종목들로 돌려준다 (저장은 호출하는 쪽이 한다).
+
+    ``progress(단계, 한 개수, 전체 개수)`` 는 단계(``prices`` → ``flow`` → ``sector``)가 시작될 때와 종목 하나가 끝날 때마다 불린다.
+    언제나 이 함수를 부른 스레드에서 불리므로 받는 쪽이 잠금을 걸 필요가 없다.
+    """
+    report = progress or _no_progress
+    report("prices", 0, 0)  # 전체 개수는 제외 규칙을 적용한 뒤에야 안다
     classified = universe.classify(externals.listing(), as_of)
     store = PriceStore(
         externals.prices,
@@ -107,9 +128,11 @@ def build_items(
         today=today,
         retry_wait=retry_wait,
     )
-    result = run_screen(classified, config, as_of, store, workers=workers)
+    result = run_screen(
+        classified, config, as_of, store, workers=workers, progress=lambda done, total: report("prices", done, total)
+    )
     rows = result.candidates.to_dict("records") if not result.candidates.empty else []
     items = [_to_item(seq, row) for seq, row in enumerate(rows, start=1)]
-    _apply_flow(items, externals, config, as_of, workers, retry_wait)
-    _apply_sector(items, externals, workers)
+    _apply_flow(items, externals, config, as_of, workers, retry_wait, report)
+    _apply_sector(items, externals, workers, report)
     return items

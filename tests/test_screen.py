@@ -217,3 +217,45 @@ def test_no_static_exclusion_keeps_everyone(keys):
     kept, by_kind = apply_static_exclusions(uni.classify(listing, AS_OF), keys)
     assert len(kept) == 2
     assert by_kind == {}
+
+
+# --- 진행은 끝난 순서로 센다 (#56) ---
+
+
+def test_progress_counts_finished_items_even_when_an_earlier_one_is_still_running():
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+
+    from krx_screener.screen import map_with_progress
+
+    others_done = threading.Event()
+    counts: list[int] = []
+
+    def fn(x):
+        if x == 0:  # 맨 앞 종목은 나머지가 다 끝난 뒤에야 끝난다
+            assert others_done.wait(timeout=5), "나머지 진행이 앞 종목을 기다린다"
+        return x * 10
+
+    def progress(done, total):
+        counts.append(done)
+        if done == 3:
+            others_done.set()
+
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        result = map_with_progress(pool, fn, [0, 1, 2, 3], progress)
+    assert result == [0, 10, 20, 30]  # 결과는 입력 순서
+    assert counts == [1, 2, 3, 4]
+
+
+def test_map_with_progress_raises_the_error_of_a_failed_item():
+    from concurrent.futures import ThreadPoolExecutor
+
+    from krx_screener.screen import map_with_progress
+
+    def fn(x):
+        if x == 2:
+            raise ValueError("boom")
+        return x
+
+    with ThreadPoolExecutor(max_workers=2) as pool, pytest.raises(ValueError, match="boom"):
+        map_with_progress(pool, fn, [1, 2, 3])

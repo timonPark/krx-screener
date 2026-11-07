@@ -24,7 +24,7 @@ def seeded(repo, codes=("028050", "207940", "003490")):
 # --- 세션 ---
 
 
-def test_new_session_has_its_own_uuid_and_the_date(repo):
+def test_new_session_has_its_own_uuid_and_thedate(repo):
     first, second = repo.create_session(AS_OF), repo.create_session(AS_OF)  # 같은 날 두 번
     assert first.id != second.id
     assert isinstance(first.id, uuid.UUID)
@@ -215,3 +215,80 @@ def test_ratings_stay_inside_their_session(repo):
     first, second = seeded(repo), seeded(repo)
     repo.save_agent_ratings(first.id, "028050", {"bull": "Buy"})
     assert repo.agent_ratings(second.id, "028050") == {}
+
+
+# --- 목록을 만드는 중인 세션 (#56) ---
+
+def _building(repo, as_of=date(2026, 11, 5)):
+    return repo.create_building_session(uuid.uuid4(), as_of)
+
+
+def test_a_building_session_starts_with_no_progress(repo):
+    session = _building(repo)
+    assert (session.build_state, session.build_stage, session.build_done, session.build_total, session.build_error) == ("building", "", 0, 0, "")
+    assert repo.create_session(date(2026, 11, 5)).build_state == "ready"  # 일반 세션(시드·명령줄)은 완성된 채로 만든다
+
+
+def test_progress_is_saved_and_a_stage_change_resets_the_numbers(repo):
+    session = _building(repo)
+    repo.set_build_progress(session.id, "prices", 120, 2398)
+    saved = repo.get_session(session.id)
+    assert (saved.build_stage, saved.build_done, saved.build_total) == ("prices", 120, 2398)
+    repo.set_build_progress(session.id, "flow", 0, 95)
+    assert (repo.get_session(session.id).build_stage, repo.get_session(session.id).build_done) == ("flow", 0)
+
+
+def test_finishing_a_build_saves_the_stocks_and_marks_it_ready_together(repo):
+    session = _building(repo)
+    repo.finish_build(session.id, [Item(seq=1, code="000010", name="가", market="KOSPI"), Item(seq=2, code="000020", name="나", market="KOSPI")])
+    done = repo.get_session(session.id)
+    assert (done.build_state, done.total, done.build_stage, done.build_done, done.build_total) == ("ready", 2, "", 2, 2)
+
+
+def test_if_saving_the_stocks_fails_the_build_stays_unfinished_and_nothing_is_saved(repo):
+    session = _building(repo)
+    bad = [Item(seq=1, code="000010", name="가", market="KOSPI"), Item(seq=1, code="000020", name="나", market="KOSPI")]  # 순번이 겹친다
+    with pytest.raises(psycopg.errors.UniqueViolation):
+        repo.finish_build(session.id, bad)
+    unchanged = repo.get_session(session.id)
+    assert (unchanged.build_state, unchanged.total) == ("building", 0)
+
+
+def test_a_failed_build_keeps_the_reason(repo):
+    session = _building(repo)
+    repo.fail_build(session.id, "종목 목록을 받지 못했습니다")
+    failed = repo.get_session(session.id)
+    assert (failed.build_state, failed.build_error, failed.total) == ("failed", "종목 목록을 받지 못했습니다", 0)
+
+
+def test_the_builder_of_a_date_can_be_found_and_only_one_may_build_a_date_at_a_time(repo):
+    first = _building(repo)
+    assert repo.building_session_id(date(2026, 11, 5)) == first.id
+    assert repo.building_session_id(date(2026, 11, 4)) is None
+    with pytest.raises(psycopg.errors.UniqueViolation):
+        _building(repo)  # 같은 기준일의 두 번째 만들기
+
+
+def test_unfinished_sessions_of_a_date_are_discarded_but_a_live_build_and_finished_ones_are_kept(repo, hold_lock):
+    day = date(2026, 11, 5)
+    stale = _building(repo, day)  # 잠금이 없는 만들기 = 중단됨
+    failed = _building(repo, date(2026, 11, 3))
+    repo.fail_build(failed.id, "실패")
+    ready = repo.create_session(day)
+    other_day = _building(repo, date(2026, 11, 4))
+    assert repo.discard_unfinished(day) == 1
+    assert repo.get_session(stale.id) is None
+    assert all(repo.get_session(s.id) is not None for s in (ready, other_day, failed))  # 완성된 것, 다른 기준일은 그대로
+    live = _building(repo, day)
+    hold_lock(live.id)
+    assert repo.discard_unfinished(day) == 0 and repo.get_session(live.id) is not None  # 지금 만드는 중인 것은 지우지 않는다
+    assert repo.discard_unfinished(date(2026, 11, 3)) == 1  # 실패한 것은 지운다
+
+
+def test_a_session_is_interrupted_when_nobody_holds_its_build_lock(repo, hold_lock):
+    session = _building(repo)
+    assert repo.effective_build_state(session) == "interrupted"
+    hold_lock(session.id)
+    assert repo.effective_build_state(session) == "building"
+    repo.finish_build(session.id, [])
+    assert repo.effective_build_state(repo.get_session(session.id)) == "ready"

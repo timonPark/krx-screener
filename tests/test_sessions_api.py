@@ -25,10 +25,12 @@ def _count(pg_conn) -> int:
 
 def test_creating_a_session_returns_it_and_stores_it(client, pg_conn):
     response = client.post("/api/sessions", json={"as_of": "2026-11-05"})
-    assert response.status_code == 201
+    assert response.status_code == 202  # 목록은 뒤에서 만든다 (#56)
     body = response.json()
-    assert set(body) == {"id", "as_of", "created_at", "total"}
-    assert (body["as_of"], body["total"]) == ("2026-11-05", 3)  # 기본 세계의 세 종목이 모두 목록에 들어간다
+    assert set(body) == {"id", "as_of", "created_at", "total", "build"}
+    assert (body["as_of"], body["total"], body["build"]["state"]) == ("2026-11-05", 0, "building")  # 응답은 만들기를 시작한 모습
+    finished = client.get(f"/api/sessions/{body['id']}").json()["session"]
+    assert (finished["total"], finished["build"]["state"]) == (3, "ready")  # 기본 세계의 세 종목이 모두 목록에 들어간다
 
     row = pg_conn.execute("SELECT id, as_of FROM sessions").fetchone()
     assert (str(row[0]), row[1]) == (body["id"], date(2026, 11, 5))
@@ -61,7 +63,9 @@ def test_list_is_most_recent_first_and_has_the_same_shape(client):
     newer = client.post("/api/sessions", json={"as_of": "2026-11-05"}).json()
     listed = client.get("/api/sessions").json()
     assert [s["id"] for s in listed] == [newer["id"], older["id"]]
-    assert listed[0] == newer  # 만들 때 받은 값과 같은 모양·값
+    assert set(listed[0]) == set(newer)  # 만들 때 받은 값과 같은 모양
+    assert (listed[0]["id"], listed[0]["as_of"], listed[0]["created_at"]) == (newer["id"], newer["as_of"], newer["created_at"])
+    assert (listed[0]["total"], listed[0]["build"]["state"]) == (3, "ready")  # 값은 다 만든 뒤의 것이다
 
 
 # --- 잘못된 기준일은 한국어 메시지로 거절되고 아무것도 남지 않는다 (테스트 DB 필요) ---

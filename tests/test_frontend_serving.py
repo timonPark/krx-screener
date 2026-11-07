@@ -103,7 +103,7 @@ def test_the_api_still_answers_next_to_the_screen(web):
 
 def test_a_session_can_be_created_and_read_through_the_same_app_that_serves_the_screen(web):
     created = web.post("/api/sessions", json={"as_of": "2026-11-05"})
-    assert created.status_code == 201
+    assert created.status_code == 202
     session_id = created.json()["id"]
     assert web.get(f"/api/sessions/{session_id}").json()["session"]["id"] == session_id
     assert web.get("/api/sessions/latest").status_code == 200
