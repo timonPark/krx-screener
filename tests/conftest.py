@@ -9,7 +9,10 @@
 """
 
 import os
+import shutil
+import subprocess
 from datetime import date
+from pathlib import Path
 
 import pytest
 from fakes import make_externals, repo_config
@@ -20,6 +23,21 @@ from krx_screener.api import Dependencies, create_app
 from krx_screener.repository import SessionRepository
 
 TEST_URL_ENV = "KRX_SCREENER_TEST_DATABASE_URL"
+ROOT = Path(__file__).resolve().parents[1]
+
+
+@pytest.fixture(scope="session")
+def frontend_dist() -> Path:
+    """화면(TypeScript)을 빌드해서 ``frontend/dist`` 를 최신으로 만든다 (테스트 세션에 한 번, 수 초). 화면을 쓰는 테스트가 요청한다.
+
+    Node 와 `npm ci` 로 설치한 도구(``node_modules``)가 없으면 건너뛴다.
+    """
+    tsc = ROOT / "node_modules" / ".bin" / "tsc"
+    if shutil.which("node") is None or not tsc.exists():
+        pytest.skip("화면을 빌드할 수 없음: 저장소 폴더에서 `npm ci` 를 먼저 실행하세요 (Node 22 이상)")
+    result = subprocess.run([str(tsc), "-p", "tsconfig.json"], cwd=ROOT, capture_output=True, text=True, timeout=300)
+    assert result.returncode == 0, f"화면 빌드 실패:\n{result.stdout}{result.stderr}"
+    return ROOT / "frontend" / "dist"
 
 
 def _reset(conn) -> None:

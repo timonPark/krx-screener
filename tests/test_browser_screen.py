@@ -36,7 +36,7 @@ pytestmark = pytest.mark.skipif(
 
 
 @pytest.fixture
-def server(pg_conn, tmp_path):
+def server(pg_conn, tmp_path, frontend_dist):
     srv = BrowserServer(os.environ["KRX_SCREENER_TEST_DATABASE_URL"], tmp_path / "state_logs")
     srv.start()
     yield srv

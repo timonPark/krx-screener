@@ -27,6 +27,8 @@ from krx_screener.routes_sessions import (
 )
 
 FRONTEND = Path(__file__).resolve().parents[1] / "frontend"
+SRC = FRONTEND / "src"  # TypeScript 소스
+DIST = FRONTEND / "dist"  # tsc 가 만든 결과 (Node 로 불러 확인하는 것은 이쪽)
 REPORT_ID = re.compile(r"^\d{6}_\d{8}_\d{6}$")  # 028050_20261106_172435
 
 
@@ -41,14 +43,19 @@ def _node_major() -> int:
         return 0
 
 
-needs_node = pytest.mark.skipif(_node_major() < 22, reason="Node 22 이상이 없음")
+_skip_without_node = pytest.mark.skipif(_node_major() < 22, reason="Node 22 이상이 없음")
+
+
+def needs_node(test):
+    """Node 22 이상이 있어야 돌고, 화면을 빌드해서 ``frontend/dist`` 를 최신으로 만든 뒤에 돈다."""
+    return pytest.mark.usefixtures("frontend_dist")(_skip_without_node(test))
 
 
 def run_js(body: str) -> Any:
     """화면 모듈을 가져와 ``body`` 를 실행하고 ``print(JSON)`` 한 결과를 돌려준다."""
     script = f"""
 globalThis.location = {{ search: '' }};  // config.js 가 주소 검색어를 읽는다
-const dir = {json.dumps(FRONTEND.as_uri())};
+const dir = {json.dumps(DIST.as_uri())};
 {body}
 """
     result = subprocess.run(
@@ -159,13 +166,16 @@ console.log(JSON.stringify(await api.getSession('latest')));
 # --- 화면 코드에 run_id 가 남아 있지 않다 ---
 
 
-@pytest.mark.parametrize("name", ["app.js", "mock.js", "config.js", "api.js", "report.js", "index.html"])
-def test_the_screen_code_no_longer_uses_the_run_id(name):
-    assert "run_id" not in (FRONTEND / name).read_text(encoding="utf-8")
+@pytest.mark.parametrize(
+    "path",
+    ["src/app.ts", "src/mock.ts", "src/config.ts", "src/api.ts", "src/report.ts", "src/types.ts", "index.html"],
+)
+def test_the_screen_code_no_longer_uses_the_run_id(path):
+    assert "run_id" not in (FRONTEND / path).read_text(encoding="utf-8")
 
 
 def test_the_report_column_reads_the_report_id():
-    app = (FRONTEND / "app.js").read_text(encoding="utf-8")
+    app = (SRC / "app.ts").read_text(encoding="utf-8")
     assert "it.report_id" in app
 
 
@@ -245,7 +255,7 @@ def test_clearing_when_nothing_is_shown_is_harmless():
 
 
 def test_the_screen_keeps_action_errors_through_the_refresh_that_follows():
-    app = (FRONTEND / "app.js").read_text(encoding="utf-8")
+    app = (SRC / "app.ts").read_text(encoding="utf-8")
     assert "createNotice" in app and "clearIfFromRefresh" in app
     assert "showError(err, 'action')" in app  # 동작(withBusy)의 오류는 동작 출처로 띄운다
 

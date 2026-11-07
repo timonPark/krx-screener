@@ -1,118 +1,152 @@
 import { api, ApiError } from './api.js';
 import { config } from './config.js';
 import { criteriaText } from './criteria.js';
+import type { CriteriaText } from './criteria.js';
 import { createNotice } from './notice.js';
+import type { Notice, NoticeSource } from './notice.js';
 import { reportHref } from './report.js';
+import type { Build, BuildState, Counts, Item, ItemState, Session, SessionDetail } from './types.js';
 
-const $ = (id) => document.getElementById(id);
-const state = { sessions: [], sessionId: null, data: null, filter: 'all', sort: 'seq', pollTimer: null, busy: false, buildState: 'ready' };
+// id 로 요소를 찾는다. 없으면 어느 id 인지 알려 주며 멈춘다 (index.html 과 어긋난 것이다).
+function $<T extends HTMLElement = HTMLElement>(id: string): T {
+  const el: HTMLElement | null = document.getElementById(id);
+  if (!el) throw new Error(`화면에 #${id} 요소가 없습니다.`);
+  return el as T;
+}
 
-const STATUS_LABEL = { pending: '대기', running: '처리 중', done: '완료', failed: '실패' };
-const GRADE_CLASS = { '매수': 'g-buy', '비중 확대': 'g-overweight', '보유': 'g-hold', '비중 축소': 'g-underweight', '매도': 'g-sell' };
-const FLOW_CLASS = { '양호': 'flow-good', '부분': 'flow-partial', '약함': 'flow-weak' };
+type FilterKey = 'all' | ItemState;
+type SortKey = 'seq' | 'score' | 'rank';
+
+interface State {
+  sessions: Session[];
+  sessionId: string | null;
+  data: SessionDetail | null;
+  filter: FilterKey;
+  sort: SortKey;
+  pollTimer: number | undefined;
+  busy: boolean;
+  buildState: BuildState;
+}
+
+const state: State = { sessions: [], sessionId: null, data: null, filter: 'all', sort: 'seq', pollTimer: undefined, busy: false, buildState: 'ready' };
+
+const STATUS_LABEL: Record<ItemState, string> = { pending: '대기', running: '처리 중', done: '완료', failed: '실패' };
+const GRADE_CLASS: Record<string, string> = { '매수': 'g-buy', '비중 확대': 'g-overweight', '보유': 'g-hold', '비중 축소': 'g-underweight', '매도': 'g-sell' };
+const FLOW_CLASS: Record<string, string> = { '양호': 'flow-good', '부분': 'flow-partial', '약함': 'flow-weak' };
 
 // 목록을 만드는 중의 상태 (#56): building 만드는 중 · ready 완성 · failed 실패 · interrupted 만들던 서버가 죽음
-const BUILD_STAGE = { prices: '시세', flow: '수급', sector: '업종·기업 설명' };
-const BUILD_SUFFIX = { building: ' · 만드는 중', failed: ' · 실패', interrupted: ' · 중단됨' };
-const BUILD_NOT_READY = {
+const BUILD_STAGE: Record<string, string> = { prices: '시세', flow: '수급', sector: '업종·기업 설명' };
+const BUILD_SUFFIX: Record<string, string> = { building: ' · 만드는 중', failed: ' · 실패', interrupted: ' · 중단됨' };
+const BUILD_NOT_READY: Record<string, string> = {
   building: '목록을 만드는 중입니다. 끝난 뒤에 쓸 수 있습니다.',
   failed: '목록을 만들지 못했습니다. 같은 기준일로 다시 뽑으세요.',
   interrupted: '목록을 만들다 서버가 멈췄습니다. 같은 기준일로 다시 뽑으세요.',
 };
-const READY = { state: 'ready', stage: '', done: 0, total: 0, error: '' };
-const buildOf = (data) => data?.session.build || READY;
+const READY: Build = { state: 'ready', stage: '', done: 0, total: 0, error: '' };
+const buildOf = (data: SessionDetail | null): Build => data?.session.build || READY;
+
+// 처리 구간 입력 (오프셋: 건너뛸 개수, 개수: 보낼 개수)
+interface Range {
+  offset: number;
+  count: number;
+  valid: boolean;
+}
 
 // ---------- 형식 ----------
-const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-const fmtInt = (n) => (n == null ? '—' : Number(n).toLocaleString('ko-KR'));
-const fmtEok = (won) => (won == null ? '—' : `${Math.round(won / 1e8).toLocaleString('ko-KR')}억`);
-const kst = new Intl.DateTimeFormat('ko-KR', { timeZone: 'Asia/Seoul', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false });
-const kstTime = new Intl.DateTimeFormat('ko-KR', { timeZone: 'Asia/Seoul', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
-function fmtDateTime(iso) {
+const HTML_ESCAPE: Record<string, string> = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
+const esc = (v: unknown): string => String(v ?? '').replace(/[&<>"']/g, (c: string): string => HTML_ESCAPE[c] ?? c);
+const fmtInt = (n: number | null | undefined): string => (n == null ? '—' : Number(n).toLocaleString('ko-KR'));
+const fmtEok = (won: number | null | undefined): string => (won == null ? '—' : `${Math.round(won / 1e8).toLocaleString('ko-KR')}억`);
+const kst: Intl.DateTimeFormat = new Intl.DateTimeFormat('ko-KR', { timeZone: 'Asia/Seoul', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false });
+const kstTime: Intl.DateTimeFormat = new Intl.DateTimeFormat('ko-KR', { timeZone: 'Asia/Seoul', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+function fmtDateTime(iso: string | null | undefined): string {
   if (!iso) return '';
-  const p = Object.fromEntries(kst.formatToParts(new Date(iso)).map((x) => [x.type, x.value]));
+  const p: Record<string, string> = Object.fromEntries(
+    kst.formatToParts(new Date(iso)).map((x: Intl.DateTimeFormatPart): [string, string] => [x.type, x.value]),
+  );
   return `${p.month}-${p.day} ${p.hour}:${p.minute}`;
 }
-const sessionLabel = (s) => `${s.as_of}-${String(s.id).replace(/-/g, '').slice(0, 8)}`;
-function fmtScore(s) {
+const sessionLabel = (s: Session): string => `${s.as_of}-${String(s.id).replace(/-/g, '').slice(0, 8)}`;
+function fmtScore(s: number | null | undefined): string {
   if (s == null) return '';
-  const sign = s > 0 ? '+' : s < 0 ? '−' : '';
+  const sign: string = s > 0 ? '+' : s < 0 ? '−' : '';
   return sign + Math.abs(s).toFixed(2);
 }
-function fmtMinutes(m) {
+function fmtMinutes(m: number): string {
   if (m < 60) return `${m}분`;
-  const h = Math.floor(m / 60), r = m % 60;
+  const h: number = Math.floor(m / 60);
+  const r: number = m % 60;
   return r ? `${h}시간 ${r}분` : `${h}시간`;
 }
-function prevBusinessDay() {
-  const now = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Seoul' }));
-  const d = new Date(now);
+function prevBusinessDay(): string {
+  const now: Date = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Seoul' }));
+  const d: Date = new Date(now);
   do { d.setDate(d.getDate() - 1); } while (d.getDay() === 0 || d.getDay() === 6);
-  const pad = (n) => String(n).padStart(2, '0');
+  const pad = (n: number): string => String(n).padStart(2, '0');
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
 
 // ---------- 알림 ----------
-const notice = createNotice($('error-notice'));
+const notice: Notice = createNotice($('error-notice'));
 // from: 'action' = 누른 동작이 실패 (이어지는 조회가 성공해도 둔다), 'refresh' = 화면을 불러오다 실패 (다음 조회가 성공하면 사라진다)
-function showError(err, from = 'refresh') {
+function showError(err: unknown, from: NoticeSource = 'refresh'): void {
   if (!err) { notice.clear(); return; }
   notice.show(err instanceof ApiError ? err.message : String(err), from);
 }
 
 // ---------- 데이터 ----------
-async function loadSessions(selectId) {
+async function loadSessions(selectId?: string): Promise<void> {
   state.sessions = await api.listSessions();
-  const sel = $('session');
+  const sel: HTMLSelectElement = $<HTMLSelectElement>('session');
   sel.innerHTML = state.sessions.length
-    ? state.sessions.map((s, i) => `<option value="${esc(s.id)}">${esc(sessionLabel(s))}${esc(BUILD_SUFFIX[s.build?.state] || '')}${i === 0 ? ' (최근)' : ''}</option>`).join('')
+    ? state.sessions.map((s: Session, i: number): string => `<option value="${esc(s.id)}">${esc(sessionLabel(s))}${esc(BUILD_SUFFIX[s.build?.state] || '')}${i === 0 ? ' (최근)' : ''}</option>`).join('')
     : '<option value="">세션 없음 — 새 목록을 뽑으세요</option>';
   state.sessionId = selectId || state.sessions[0]?.id || null;
   if (state.sessionId) sel.value = state.sessionId;
 }
 
-async function refresh() {
+async function refresh(): Promise<void> {
   clearTimeout(state.pollTimer);
   if (!state.sessionId) { state.data = null; render(); return; }
   try {
     state.data = await api.getSession(state.sessionId);
     notice.clearIfFromRefresh();   // 동작이 실패해서 띄운 오류는 이 조회가 성공해도 지우지 않는다
-    const was = state.buildState;
+    const was: BuildState = state.buildState;
     state.buildState = buildOf(state.data).state;
     if (was === 'building' && state.buildState !== 'building') await loadSessions(state.sessionId);   // 세션 목록의 '만드는 중' 표시를 지운다
   } catch (err) {
     showError(err);
   }
   render();
-  const building = buildOf(state.data).state === 'building';
+  const building: boolean = buildOf(state.data).state === 'building';
   if (state.data?.processing || building) {
-    const ms = building ? (config.mock ? config.mockBuildPollMs : config.buildPollMs) : (config.mock ? config.mockPollMs : config.pollMs);
+    const ms: number = building ? (config.mock ? config.mockBuildPollMs : config.buildPollMs) : (config.mock ? config.mockPollMs : config.pollMs);
     state.pollTimer = setTimeout(refresh, ms);
   }
 }
 
 // ---------- 그리기 ----------
-function render() {
-  const d = state.data;
-  const items = d?.items || [];
-  const total = d?.session.total ?? items.length;
-  const c = d?.counts || { pending: 0, running: 0, done: 0, failed: 0 };
-  const build = buildOf(d);
+function render(): void {
+  const d: SessionDetail | null = state.data;
+  const items: Item[] = d?.items || [];
+  const total: number = d?.session.total ?? items.length;
+  const c: Counts = d?.counts || { pending: 0, running: 0, done: 0, failed: 0 };
+  const build: Build = buildOf(d);
 
   // 세션 정보
   $('m-asof').textContent = d?.session.as_of || '—';
   $('m-created').textContent = d ? fmtDateTime(d.session.created_at) : '—';
   $('m-total').textContent = d && build.state === 'ready' ? fmtInt(total) : '—';
   // 필터 문구는 이 세션이 목록을 뽑을 때 쓴 조건으로 만든다 (#57). 세션이 없으면 —
-  const text = d ? criteriaText(d.session.criteria) : { filter: '—', extra: '—' };
+  const text: CriteriaText = d ? criteriaText(d.session.criteria) : { filter: '—', extra: '—' };
   $('m-filter').textContent = text.filter;
   $('m-extra').textContent = text.extra;
 
   // 갱신 표시
-  const building = build.state === 'building';
+  const building: boolean = build.state === 'building';
   $('poll-dot').classList.toggle('live', !!d?.processing || building);
-  const last = kstTime.format(new Date());
-  const everyMs = building ? (config.mock ? config.mockBuildPollMs : config.buildPollMs) : (config.mock ? config.mockPollMs : config.pollMs);
+  const last: string = kstTime.format(new Date());
+  const everyMs: number = building ? (config.mock ? config.mockBuildPollMs : config.buildPollMs) : (config.mock ? config.mockPollMs : config.pollMs);
   $('poll-text').textContent = building
     ? `목록 만드는 중 · ${everyMs / 1000}초마다 갱신 · 마지막 ${last}`
     : d?.processing
@@ -120,10 +154,11 @@ function render() {
       : `마지막 갱신 ${last}`;
 
   // 진행
-  const processed = c.done + c.failed;
+  const processed: number = c.done + c.failed;
   $('p-processed').textContent = `${processed} / ${total}`;
-  ['done', 'running', 'failed', 'pending'].forEach((k) => { $(`p-${k}`).textContent = c[k]; });
-  const pct = (n) => (total ? `${(n / total) * 100}%` : '0%');
+  const keys: ItemState[] = ['done', 'running', 'failed', 'pending'];
+  keys.forEach((k: ItemState): void => { $(`p-${k}`).textContent = String(c[k]); });
+  const pct = (n: number): string => (total ? `${(n / total) * 100}%` : '0%');
   $('b-done').style.width = pct(c.done);
   $('b-failed').style.width = pct(c.failed);
   $('b-running').style.width = pct(c.running);
@@ -137,13 +172,13 @@ function render() {
   renderOrganize(c, d);
 }
 
-function renderBuild(build) {
+function renderBuild(build: Build): void {
   $('build-card').hidden = build.state === 'ready';
   if (build.state === 'ready') return;
   $('build-bar-wrap').hidden = build.state !== 'building';
   if (build.state === 'building') {
-    const label = BUILD_STAGE[build.stage] || '시세';
-    const known = build.total > 0;
+    const label: string = BUILD_STAGE[build.stage] || '시세';
+    const known: boolean = build.total > 0;
     $('build-title').textContent = '목록을 만드는 중입니다';
     $('build-detail').textContent = known ? `${label} 조회 ${fmtInt(build.done)} / ${fmtInt(build.total)}` : `${label} 조회 준비 중`;
     $('build-bar').style.width = known ? `${Math.min(100, (build.done / build.total) * 100)}%` : '0%';
@@ -160,31 +195,31 @@ function renderBuild(build) {
   }
 }
 
-function renderChips(c, total) {
-  const defs = [['all', '전체', total], ['pending', '대기', c.pending], ['running', '처리 중', c.running], ['done', '완료', c.done], ['failed', '실패', c.failed]];
-  $('chips').innerHTML = defs.map(([key, label, n]) =>
+function renderChips(c: Counts, total: number): void {
+  const defs: Array<[FilterKey, string, number]> = [['all', '전체', total], ['pending', '대기', c.pending], ['running', '처리 중', c.running], ['done', '완료', c.done], ['failed', '실패', c.failed]];
+  $('chips').innerHTML = defs.map(([key, label, n]: [FilterKey, string, number]): string =>
     `<button type="button" class="chip" data-filter="${key}" aria-pressed="${state.filter === key}">${label} <span class="num">${n}</span></button>`).join('');
 }
 
-function sortItems(list) {
-  const arr = list.slice();
-  if (state.sort === 'score') arr.sort((a, b) => ((b.score ?? -99) - (a.score ?? -99)) || (a.seq - b.seq));
-  else if (state.sort === 'rank') arr.sort((a, b) => ((a.rank ?? 1e9) - (b.rank ?? 1e9)) || (a.seq - b.seq));
-  else arr.sort((a, b) => a.seq - b.seq);
+function sortItems(list: Item[]): Item[] {
+  const arr: Item[] = list.slice();
+  if (state.sort === 'score') arr.sort((a: Item, b: Item): number => ((b.score ?? -99) - (a.score ?? -99)) || (a.seq - b.seq));
+  else if (state.sort === 'rank') arr.sort((a: Item, b: Item): number => ((a.rank ?? 1e9) - (b.rank ?? 1e9)) || (a.seq - b.seq));
+  else arr.sort((a: Item, b: Item): number => a.seq - b.seq);
   return arr;
 }
 
-function scoreCell(it) {
+function scoreCell(it: Item): string {
   if (it.state !== 'done' || it.score == null) return '<span class="faint">—</span>';
-  const s = it.score;
-  const w = Math.round((Math.min(Math.abs(s), 2) / 2) * 30);
-  const cls = s > 0 ? 'pos' : s < 0 ? 'neg' : '';
+  const s: number = it.score;
+  const w: number = Math.round((Math.min(Math.abs(s), 2) / 2) * 30);
+  const cls: string = s > 0 ? 'pos' : s < 0 ? 'neg' : '';
   return `<div class="score"><span class="num score-val ${cls}">${fmtScore(s)}</span>`
     + `<span class="score-bar" aria-hidden="true">${w ? `<span class="${cls}" style="width:${w}px"></span>` : ''}</span></div>`
     + `<div class="tiny">에이전트 <span class="num">${it.agents_rated}/${it.agents_total}</span></div>`;
 }
 
-function statusSub(it) {
+function statusSub(it: Item): string {
   if (it.state === 'done') return fmtDateTime(it.analyzed_at);
   if (it.state === 'failed') return `${it.error_message || '실패'} · 다시 처리하면 재시도`;
   if (it.state === 'running') return '분석 중';
@@ -192,27 +227,27 @@ function statusSub(it) {
 }
 
 // 보고서 칸: TradingAgents-KR 의 보고서 번호(report_id). 주소 틀을 정하면 그 보고서 화면으로 가는 링크가 된다.
-function reportCell(it) {
+function reportCell(it: Item): string {
   if (!it.report_id) return '<span class="faint">—</span>';
-  const href = reportHref(config.reportUrlTemplate, it.report_id);
+  const href: string | null = reportHref(config.reportUrlTemplate, it.report_id);
   if (!href) return `<span class="num" style="font-size:12px">${esc(it.report_id)}</span>`;
   return `<a class="num" style="font-size:12px" href="${esc(href)}" target="_blank" rel="noopener">${esc(it.report_id)}</a>`;
 }
 
-function renderRows(items, total) {
-  const stale = !!state.data?.rank_stale;
-  const visible = sortItems(items.filter((it) => state.filter === 'all' || it.state === state.filter));
-  $('rows').innerHTML = visible.map((it) => {
-    const flowCls = FLOW_CLASS[it.flow_status] || 'flow-unknown';
-    const flowLabel = FLOW_CLASS[it.flow_status] ? it.flow_status : '미확인';
-    const flowTitle = it.foreign_net_5d == null
+function renderRows(items: Item[], total: number): void {
+  const stale: boolean = !!state.data?.rank_stale;
+  const visible: Item[] = sortItems(items.filter((it: Item): boolean => state.filter === 'all' || it.state === state.filter));
+  $('rows').innerHTML = visible.map((it: Item): string => {
+    const flowCls: string = FLOW_CLASS[it.flow_status] || 'flow-unknown';
+    const flowLabel: string = FLOW_CLASS[it.flow_status] ? it.flow_status : '미확인';
+    const flowTitle: string = it.foreign_net_5d == null
       ? '최근 5거래일 순매수를 읽지 못함 (수급 0 아님)'
       : `외국인 ${fmtInt(it.foreign_net_5d)}주 · 기관 ${fmtInt(it.institution_net_5d)}주 (5거래일)`;
-    const flags = (it.is_caution ? '<span class="flag">투자주의</span>' : '') + (it.is_foreign ? '<span class="flag">외국기업</span>' : '');
-    const grade = it.state === 'done' && it.decision_label
+    const flags: string = (it.is_caution ? '<span class="flag">투자주의</span>' : '') + (it.is_foreign ? '<span class="flag">외국기업</span>' : '');
+    const grade: string = it.state === 'done' && it.decision_label
       ? `<span class="grade ${GRADE_CLASS[it.decision_label] || 'g-hold'}">${esc(it.decision_label)}</span>`
       : '<span class="faint">—</span>';
-    const rank = it.rank == null
+    const rank: string = it.rank == null
       ? '<span class="num rank faint">—</span>'
       : `<span class="num rank${stale ? ' stale' : ''}">${it.rank}</span>${stale ? '<div class="stale-tag">낡음</div>' : ''}`;
     return `<tr class="${it.state === 'running' ? 'is-running' : ''}">
@@ -230,38 +265,38 @@ function renderRows(items, total) {
       <td class="nw">${reportCell(it)}</td>
     </tr>`;
   }).join('');
-  const buildState = buildOf(state.data).state;
+  const buildState: BuildState = buildOf(state.data).state;
   $('empty').textContent = buildState === 'building' ? '목록을 만드는 중입니다.' : buildState === 'ready' ? '조건에 맞는 종목이 없습니다.' : '완성된 목록이 없습니다.';
   $('empty').hidden = visible.length > 0;
   $('row-count').textContent = `${fmtInt(total)}개 중 ${fmtInt(visible.length)}개 표시`;
 }
 
-function readRange() {
-  const offset = Number($('offset').value);
-  const count = Number($('count').value);
-  const valid = Number.isInteger(offset) && offset >= 0 && Number.isInteger(count) && count > 0;
+function readRange(): Range {
+  const offset: number = Number($<HTMLInputElement>('offset').value);
+  const count: number = Number($<HTMLInputElement>('count').value);
+  const valid: boolean = Number.isInteger(offset) && offset >= 0 && Number.isInteger(count) && count > 0;
   return { offset, count, valid };
 }
 
-function renderProcess(items, total) {
-  const processing = !!state.data?.processing;
-  const { offset, count, valid } = readRange();
-  const inRange = valid ? items.filter((it) => it.seq > offset && it.seq <= offset + count) : [];
-  const todo = inRange.filter((it) => it.state !== 'done').length;
-  const end = Math.min(total, offset + count);
+function renderProcess(items: Item[], total: number): void {
+  const processing: boolean = !!state.data?.processing;
+  const { offset, count, valid }: Range = readRange();
+  const inRange: Item[] = valid ? items.filter((it: Item): boolean => it.seq > offset && it.seq <= offset + count) : [];
+  const todo: number = inRange.filter((it: Item): boolean => it.state !== 'done').length;
+  const end: number = Math.min(total, offset + count);
 
   $('range').textContent = valid && offset < total ? `${offset + 1}–${end}` : '—';
   $('eta').textContent = valid ? fmtMinutes(todo * config.minutesPerItem) : '—';
-  $('offset').disabled = processing;
-  $('count').disabled = processing;
+  $<HTMLInputElement>('offset').disabled = processing;
+  $<HTMLInputElement>('count').disabled = processing;
 
-  let hint = '누르면 바로 시작 응답을 받고 처리는 뒤에서 진행됩니다. 진행 상황은 위 표에서 갱신됩니다.';
-  let disabled = state.busy || !state.data;
-  const build = buildOf(state.data);
+  let hint: string = '누르면 바로 시작 응답을 받고 처리는 뒤에서 진행됩니다. 진행 상황은 위 표에서 갱신됩니다.';
+  let disabled: boolean = state.busy || !state.data;
+  const build: Build = buildOf(state.data);
   if (build.state !== 'ready') {
-    hint = BUILD_NOT_READY[build.state]; disabled = true;
+    hint = BUILD_NOT_READY[build.state] ?? ''; disabled = true;
   } else if (processing) {
-    const cur = items.find((it) => it.state === 'running');
+    const cur: Item | undefined = items.find((it: Item): boolean => it.state === 'running');
     hint = `이 세션은 이미 처리 중입니다${cur ? ` (지금 ${cur.seq}번 ${cur.name})` : ''}. 서버에 취소 기능이 없어 중간에 멈출 수 없습니다.`;
     disabled = true;
   } else if (!valid) {
@@ -273,17 +308,17 @@ function renderProcess(items, total) {
   } else {
     hint = `이 구간에서 ${todo}개를 보냅니다 (끝난 ${inRange.length - todo}개는 건너뜀). ` + hint;
   }
-  $('start-btn').disabled = disabled;
+  $<HTMLButtonElement>('start-btn').disabled = disabled;
   $('start-btn').textContent = processing ? '처리 중…' : '처리 시작';
   $('start-hint').textContent = hint;
 }
 
-function renderOrganize(c, d) {
-  const remaining = c.pending + c.running;
-  const btn = $('organize-btn');
+function renderOrganize(c: Counts, d: SessionDetail | null): void {
+  const remaining: number = c.pending + c.running;
+  const btn: HTMLButtonElement = $<HTMLButtonElement>('organize-btn');
   btn.textContent = d?.ranked_at ? '정리 다시 실행' : '정리 실행';
-  const build = buildOf(d);
-  if (build.state !== 'ready') { btn.disabled = true; $('organize-hint').textContent = BUILD_NOT_READY[build.state]; return; }
+  const build: Build = buildOf(d);
+  if (build.state !== 'ready') { btn.disabled = true; $('organize-hint').textContent = BUILD_NOT_READY[build.state] ?? ''; return; }
   if (!d || !d.session.total) { btn.disabled = true; $('organize-hint').textContent = ''; return; }
   if (remaining > 0) {
     btn.disabled = true;
@@ -297,27 +332,29 @@ function renderOrganize(c, d) {
 }
 
 // ---------- 동작 ----------
-async function withBusy(fn) {
+async function withBusy(fn: () => Promise<unknown>): Promise<void> {
   state.busy = true; render();
   try { await fn(); showError(null); } catch (err) { showError(err, 'action'); } finally { state.busy = false; }
   await refresh();
 }
 
-$('session').addEventListener('change', (e) => { state.sessionId = e.target.value; showError(null); refresh(); });
-$('sort').addEventListener('change', (e) => { state.sort = e.target.value; render(); });
-$('chips').addEventListener('click', (e) => {
-  const b = e.target.closest('[data-filter]');
-  if (b) { state.filter = b.dataset.filter; render(); }
+$<HTMLSelectElement>('session').addEventListener('change', (): void => {
+  state.sessionId = $<HTMLSelectElement>('session').value; showError(null); void refresh();
 });
-['offset', 'count'].forEach((id) => $(id).addEventListener('input', render));
+$<HTMLSelectElement>('sort').addEventListener('change', (): void => { state.sort = $<HTMLSelectElement>('sort').value as SortKey; render(); });
+$('chips').addEventListener('click', (e: Event): void => {
+  const b: HTMLElement | null = (e.target as Element).closest<HTMLElement>('[data-filter]');
+  if (b) { state.filter = b.dataset.filter as FilterKey; render(); }
+});
+['offset', 'count'].forEach((id: string): void => { $(id).addEventListener('input', render); });
 
-$('new-list').addEventListener('submit', (e) => {
+$('new-list').addEventListener('submit', (e: Event): void => {
   e.preventDefault();
-  const asOf = $('asof').value;
-  const btn = $('new-list-btn');
+  const asOf: string = $<HTMLInputElement>('asof').value;
+  const btn: HTMLButtonElement = $<HTMLButtonElement>('new-list-btn');
   btn.disabled = true; btn.textContent = '뽑는 중…';
-  withBusy(async () => {
-    let s;
+  void withBusy(async (): Promise<void> => {
+    let s: Session;
     try {
       s = await api.createSession(asOf);
     } catch (err) {
@@ -327,28 +364,28 @@ $('new-list').addEventListener('submit', (e) => {
     }
     await loadSessions(s.id);   // 응답은 만들기를 시작한 세션이다. 진행은 이어지는 조회(refresh)가 보여 준다
     state.filter = 'all'; state.sort = 'seq';
-    $('offset').value = 0;
-  }).finally(() => { btn.disabled = false; btn.textContent = '새 목록 뽑기'; });
+    $<HTMLInputElement>('offset').value = '0';
+  }).finally((): void => { btn.disabled = false; btn.textContent = '새 목록 뽑기'; });
 });
 
-$('process').addEventListener('submit', (e) => {
+$('process').addEventListener('submit', (e: Event): void => {
   e.preventDefault();
-  const { offset, count, valid } = readRange();
+  const { offset, count, valid }: Range = readRange();
   if (!valid) return;
-  withBusy(() => api.process(state.sessionId, offset, count));
+  void withBusy((): Promise<unknown> => api.process(state.sessionId, offset, count));
 });
 
-$('organize-btn').addEventListener('click', () => {
-  withBusy(async () => {
+$('organize-btn').addEventListener('click', (): void => {
+  void withBusy(async (): Promise<void> => {
     await api.organize(state.sessionId);
-    state.sort = 'rank'; $('sort').value = 'rank';
+    state.sort = 'rank'; $<HTMLSelectElement>('sort').value = 'rank';
   });
 });
 
 // ---------- 시작 ----------
-(async function init() {
+void (async function init(): Promise<void> {
   $('mock-tag').hidden = !config.mock;
-  $('asof').value = prevBusinessDay();
+  $<HTMLInputElement>('asof').value = prevBusinessDay();
   try {
     await loadSessions();
   } catch (err) {
