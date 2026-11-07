@@ -42,17 +42,19 @@ cd frontend && python3 -m http.server 8080     # http://localhost:8080/?mock=1
 
 | 기능 | 요청 | 응답 |
 |---|---|---|
-| 1 목록 뽑기 | `POST /api/sessions` `{"as_of": "2026-11-05"}` | `Session` |
+| 1 목록 뽑기 | `POST /api/sessions` `{"as_of": "2026-11-05"}` | `202 Session` (만드는 중) · 같은 기준일을 만드는 중이면 `409 {"detail": "…", "session_id": "…"}` |
 | 세션 목록 | `GET /api/sessions` | `Session[]` (최근 순) |
 | 3 조회 | `GET /api/sessions/{id}` (`id` = `latest` 가능) | `SessionDetail` |
 | 2 나눠서 처리 | `POST /api/sessions/{id}/process` `{"offset": 0, "count": 10}` | `202 {"started": true, "queued": 7}` · 처리 중이면 `409 {"detail": "이미 처리 중입니다."}` |
-| 4 정리 | `POST /api/sessions/{id}/organize` | `200 {"ranked": 115}` · 남았으면 `409 {"detail": "...", "remaining": 3}` |
+| 4 정리 | `POST /api/sessions/{id}/organize` | `200 {"ranked": 115}` · 만드는 중이면 `409 {"detail": "...", "remaining": 0}` · 남았으면 `409 {"detail": "...", "remaining": 3}` |
 
 오류는 모두 `{"detail": "한국어 메시지"}` — 화면이 그대로 띄운다. 동작(처리·정리·새 목록)이 실패해서 띄운 오류는 다음 동작이 성공하거나 세션을 바꿀 때까지 두고, 조회 실패로 띄운 오류는 다음 조회가 성공하면 사라진다.
 
 ```jsonc
 // Session
-{ "id": "3f2a9c1b7d4e...", "as_of": "2026-11-05", "created_at": "2026-11-06T00:12:00Z", "total": 116 }
+{ "id": "3f2a9c1b7d4e...", "as_of": "2026-11-05", "created_at": "2026-11-06T00:12:00Z", "total": 116,
+  "build": { "state": "ready", "stage": "", "done": 0, "total": 0, "error": "" } }
+// build.state: building | ready | failed | interrupted. building 의 stage: prices → flow → sector, done/total 은 그 단계의 개수
 // 화면 표시는 `{as_of}-{id 앞 8자리}`
 
 // SessionDetail
