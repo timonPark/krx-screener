@@ -6,7 +6,7 @@
 from datetime import date
 
 from fakes import FakeAnalysisServer
-from test_process_api import post, seed, states, swap_server
+from test_process_api import CODES, post, seed, states, swap_server
 
 BUSY = {"detail": "이미 처리 중입니다."}
 
@@ -130,3 +130,36 @@ def test_a_stock_left_running_by_a_crash_does_not_make_the_session_look_busy(cli
     assert body["processing"] is False  # 잠금이 없으니 처리 중이 아니다
     assert post(client, session.id, offset=0, count=1).status_code == 202  # 다시 처리할 수 있다
     assert states(repo, session)["000010"] == "done"
+
+
+# --- 조회 중에 처리가 끝나거나 시작해도 응답이 어긋나지 않는다 (#58: 브라우저 테스트가 찾은 경쟁) ---
+
+
+def _after_items_read(monkeypatch, action):
+    """종목을 읽은 **직후** ``action()`` 을 한 번 실행한다 (조회 한가운데서 처리가 끝나거나 시작하는 순간을 흉내 낸다)."""
+    from krx_screener.repository import SessionRepository
+
+    original = SessionRepository.items
+
+    def items(self, session_id):
+        rows = original(self, session_id)
+        action()
+        return rows
+
+    monkeypatch.setattr(SessionRepository, "items", items)
+
+
+def test_a_process_that_ends_in_the_middle_of_a_read_is_still_reported_as_processing(client, repo, hold_lock, monkeypatch):
+    session = seed(repo)
+    holder = hold_lock(session.id)
+    repo.mark_running(session.id, CODES[0])  # 읽을 때는 처리 중인 종목이 보인다
+    _after_items_read(monkeypatch, holder.close)  # 읽은 직후 처리가 끝나서 잠금이 풀린다
+    body = client.get(f"/api/sessions/{session.id}").json()
+    # 종목은 running 인데 processing=false 로 답하면 화면이 갱신을 멈추고 영원히 '처리 중' 으로 남는다
+    assert body["counts"]["running"] == 1 and body["processing"] is True
+
+
+def test_a_process_that_starts_in_the_middle_of_a_read_is_reported_as_processing(client, repo, hold_lock, monkeypatch):
+    session = seed(repo)
+    _after_items_read(monkeypatch, lambda: hold_lock(session.id))  # 읽은 직후 다른 처리가 시작한다
+    assert client.get(f"/api/sessions/{session.id}").json()["processing"] is True
