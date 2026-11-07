@@ -6,22 +6,36 @@
 //  - 'refresh' : 화면을 다시 불러오다(처음·주기적 갱신) 실패해서 띄운 오류. 다음 조회가 성공하면 사라진다.
 //
 // `el` 은 `hidden`·`textContent` 가 있는 요소다 (DOM 없이도 확인할 수 있게 요소를 받는다).
-export function createNotice(el) {
-  let source = null;
-  return {
-    show(message, from = 'refresh') {
+export type NoticeSource = 'action' | 'refresh';
+
+export interface NoticeElement {
+  hidden: boolean | string; // HTMLElement 의 hidden 은 boolean 또는 문자열이다
+  textContent: string | null;
+}
+
+export interface Notice {
+  show(message: string, from?: NoticeSource): void;
+  clear(): void;
+  clearIfFromRefresh(): void;
+}
+
+export function createNotice(el: NoticeElement): Notice {
+  let source: NoticeSource | null = null;
+  const notice: Notice = {
+    show(message: string, from: NoticeSource = 'refresh'): void {
       source = from;
       el.textContent = message;
       el.hidden = false;
     },
-    clear() {
+    clear(): void {
       source = null;
       el.textContent = '';
       el.hidden = true;
     },
     // 조회가 성공했을 때: 조회에서 난 오류만 지운다 (동작 오류는 둔다)
-    clearIfFromRefresh() {
-      if (source !== 'action') this.clear();
+    clearIfFromRefresh(): void {
+      if (source !== 'action') notice.clear();
     },
   };
+  return notice;
 }

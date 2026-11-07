@@ -1,5 +1,18 @@
 // 화면 설정. 백엔드와 같은 주소에서 서빙하면 apiBase 는 빈 문자열 그대로 둔다.
-export const config = {
+export interface Config {
+  apiBase: string;
+  pollMs: number;
+  buildPollMs: number;
+  reportUrlTemplate: string | null;
+  minutesPerItem: number;
+  mock: boolean;
+  mockMsPerItem: number;
+  mockPollMs: number;
+  mockBuildMs: number;
+  mockBuildPollMs: number;
+}
+
+export const config: Config = {
   // 예: 'http://127.0.0.1:8100' (다른 포트의 백엔드를 부를 때). 끝에 / 없이.
   apiBase: '',
   // 처리 중일 때 조회를 다시 부르는 간격(ms)

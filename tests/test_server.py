@@ -77,7 +77,7 @@ def test_the_default_screen_folder_is_the_one_in_the_repository():
 
 
 @pytest.fixture
-def run_calls(monkeypatch):
+def run_calls(monkeypatch, frontend_dist):  # serve 는 빌드된 화면(frontend/dist)이 있어야 뜬다 (#65)
     import uvicorn
 
     calls = []
@@ -136,6 +136,14 @@ def test_serve_without_the_screen_folder_is_a_korean_error(run_calls, tmp_path):
     result = serve("--frontend", str(tmp_path / "없는-폴더"))
     assert result.exit_code == 1
     assert "화면 폴더를 찾지 못했습니다" in result.output
+    assert run_calls == []
+
+
+def test_serve_without_a_built_screen_tells_how_to_build_it(run_calls, tmp_path):
+    (tmp_path / "index.html").write_text("<html></html>", encoding="utf-8")  # 화면 폴더는 있지만 dist/app.js 가 없다
+    result = serve("--frontend", str(tmp_path))
+    assert result.exit_code == 1
+    assert "화면이 빌드되지 않았습니다" in result.output and "npm ci && npm run build" in result.output
     assert run_calls == []
 
 

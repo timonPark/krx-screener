@@ -33,6 +33,7 @@ krx-screener 작업 지침서. 코스피·코스닥 전종목에서 규칙만으
   `--no-verify`·`--amend`·강제 푸시 금지. `git add .` 대신 파일을 명시한다.
 - `.env`·자격증명·`results/`·`cache/` 는 커밋하지 않는다.
 - 커밋 전 `ruff check src tests` 와 관련 `pytest` 통과.
+  화면(`frontend/src/*.ts`)을 바꿨으면 `npm run typecheck`·`npm run lint` 도 통과해야 한다 (처음에는 `npm ci`, 모든 변수·함수에 타입을 명시한다).
 
 ## 작업 원칙
 

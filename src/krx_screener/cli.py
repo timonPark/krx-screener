@@ -722,6 +722,12 @@ def serve(
     if not (screen / "index.html").is_file():
         console.print(f"[red]화면 폴더를 찾지 못했습니다: {screen} (index.html 이 있는 폴더여야 합니다)[/red]")
         raise typer.Exit(1)
+    if not (screen / "dist" / "app.js").is_file():  # 화면은 TypeScript 라 빌드해야 뜬다 (#65)
+        console.print(
+            f"[red]화면이 빌드되지 않았습니다: {screen / 'dist' / 'app.js'} 가 없습니다.[/red]\n"
+            "저장소 폴더에서 `npm ci && npm run build` 를 한 번 실행하세요 (Node 22 이상이 필요합니다)."
+        )
+        raise typer.Exit(1)
     try:
         deps = web.build_dependencies(config_path, cache_dir=cache, frontend_dir=screen)
     except ConfigError as exc:

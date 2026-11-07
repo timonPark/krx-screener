@@ -8,7 +8,7 @@
 - ``health_error``: 분석 서버가 꺼진 것처럼 한국어 오류를 낸다. ``db_down``: DB 에 연결하지 못한다.
 - ``build_gate``: 목록을 만들 때 시세를 이 개수까지만 받고 멈춰 둔다 (올리면 이어서 받는다). 만드는 중의 진행을 안정적으로 보려는 것이다.
 
-화면의 갱신 간격(`config.js`)은 테스트에서 짧게 바꿔서 내려준다: 실제 갱신 코드를 그대로 쓰되 10초씩 기다리지 않게 한다.
+화면의 갱신 간격(`dist/config.js`)은 테스트에서 짧게 바꿔서 내려준다: 실제 갱신 코드를 그대로 쓰되 10초씩 기다리지 않게 한다.
 """
 
 from __future__ import annotations
@@ -166,7 +166,7 @@ class BrowserServer:
         )
         app = create_app(deps)
         app.router.routes.insert(0, Route("/__ctl", self._ctl, methods=["POST"]))
-        app.router.routes.insert(0, Route("/config.js", self._config_js))  # 정적 화면보다 먼저 맞게 맨 앞에 둔다
+        app.router.routes.insert(0, Route("/dist/config.js", self._config_js))  # 정적 화면보다 먼저 맞게 맨 앞에 둔다
         self.port = _free_port()
         self.url = f"http://127.0.0.1:{self.port}/"
         self._server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=self.port, log_level="warning"))
@@ -177,9 +177,9 @@ class BrowserServer:
         return JSONResponse({"ok": True})
 
     async def _config_js(self, request: Request) -> PlainTextResponse:
-        text = (FRONTEND / "config.js").read_text(encoding="utf-8")
+        text = (FRONTEND / "dist" / "config.js").read_text(encoding="utf-8")
         for old, new in (("pollMs: 10_000", "pollMs: 400"), ("buildPollMs: 2_000", "buildPollMs: 250")):
-            assert old in text, f"config.js 에 {old} 가 없다 — 테스트의 갱신 간격 바꾸기를 고친다"
+            assert old in text, f"dist/config.js 에 {old} 가 없다 — 테스트의 갱신 간격 바꾸기를 고친다"
             text = text.replace(old, new)
         return PlainTextResponse(text, media_type="text/javascript")
 

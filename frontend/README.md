@@ -1,23 +1,32 @@
 # krx-screener 화면 (frontend)
 
-`docs/backend-design.md` 11장의 화면. 동작 명세는 [docs/frontend-spec.md](../docs/frontend-spec.md), 실행 방법은 [README](../README.md) 를 본다. 빌드 없는 정적 파일(HTML·CSS·JS 모듈)이다.
+`docs/backend-design.md` 11장의 화면. 동작 명세는 [docs/frontend-spec.md](../docs/frontend-spec.md), 실행 방법은 [README](../README.md) 를 본다. HTML·CSS 와 **TypeScript** 소스(`src/*.ts`)이고, `npm run build` 가 `dist/*.js` (ES 모듈)로 바꿔서 브라우저가 읽는다 (`dist/` 는 저장소에 두지 않는다).
 디자인 원본은 Claude 디자인 캔버스 "KRX Screener 화면 디자인".
 
 | 파일 | 내용 |
 |---|---|
 | `index.html` | 세 구역: 세션 / 조회 표 / 처리·정리 |
 | `styles.css` | 색·글꼴 토큰(`:root`)과 컴포넌트 스타일 |
-| `app.js` | 화면 상태, 그리기, 버튼 동작, 처리 중 주기적 갱신 |
-| `api.js` | 백엔드 호출 (경로는 아래 API 계약) |
-| `report.js` | 보고서 링크 주소 만들기 |
-| `criteria.js` | 세션의 조건(`criteria`)을 필터·제외·수급 문구로 바꾸기 |
-| `notice.js` | 오류 알림 (동작 오류와 조회 오류가 사라지는 때를 구분) |
-| `mock.js` | 백엔드 없이 보는 예시 API (`?mock=1`) |
-| `config.js` | API 주소, 갱신 간격, 보고서 링크 주소 |
+| `src/app.ts` | 화면 상태, 그리기, 버튼 동작, 처리 중 주기적 갱신 |
+| `src/api.ts` | 백엔드 호출 (경로는 아래 API 계약) |
+| `src/report.ts` | 보고서 링크 주소 만들기 |
+| `src/criteria.ts` | 세션의 조건(`criteria`)을 필터·제외·수급 문구로 바꾸기 |
+| `src/notice.ts` | 오류 알림 (동작 오류와 조회 오류가 사라지는 때를 구분) |
+| `src/mock.ts` | 백엔드 없이 보는 예시 API (`?mock=1`) |
+| `src/types.ts` | 백엔드 응답의 타입 (`Session`·`SessionDetail`·`Item` …). 백엔드 모델과 `tests/test_frontend_types.py` 가 대조한다 |
+| `src/config.ts` | API 주소, 갱신 간격, 보고서 링크 주소 |
 
 ## 실행
 
-ES 모듈이라 `file://` 로 열면 막힌다. 아무 정적 서버로 연다.
+**먼저 빌드한다** (저장소 루트에서, Node 22 이상): `npm ci && npm run build` → `frontend/dist/`. 소스(`src/`)를 고친 뒤에도 다시 빌드한다 (`npm run build -- --watch` 로 저장할 때마다 빌드).
+ES 모듈이라 `file://` 로 열면 막힌다. 아무 정적 서버로 연다. 빌드하지 않으면 `serve` 가 한국어로 안내하고 뜨지 않는다.
+
+```bash
+npm run typecheck    # 타입 검사 (tsc --noEmit)
+npm run lint         # 모든 변수·함수(매개변수·반환값)에 타입이 적혀 있는지 검사 (ESLint typedef 규칙)
+```
+
+**코드 규칙**: 모든 변수와 함수의 데이터 타입을 명시한다 (추론에 맡기지 않는다). 함수를 담는 `const f = (x: number): string => …` 의 변수 자체는 매개변수와 반환 타입으로 대신한다. 규칙은 `eslint.config.js` 에 있다.
 
 **백엔드와 함께 (권장)** — 백엔드가 이 폴더를 같이 서빙한다 (`apiBase: ''` 그대로, 같은 주소의 `/api` 를 불러서 CORS 불필요).
 
@@ -33,12 +42,12 @@ ES 모듈이라 `file://` 로 열면 막힌다. 아무 정적 서버로 연다.
 cd frontend && python3 -m http.server 8080     # http://localhost:8080/?mock=1
 ```
 
-다른 포트에서 화면만 따로 띄우고 실제 백엔드를 부르려면 `config.js` 의 `apiBase` 를 백엔드 주소로 바꾸고 백엔드에 CORS 허용이 필요하다
+다른 포트에서 화면만 따로 띄우고 실제 백엔드를 부르려면 `src/config.ts` 의 `apiBase` 를 백엔드 주소로 바꾸고 백엔드에 CORS 허용이 필요하다
 (백엔드는 지금 CORS 를 허용하지 않는다).
 
 ## API 계약 (화면이 기대하는 모양)
 
-설계 문서에 경로가 정해져 있지 않아 화면 쪽에서 제안한 형태다. 바꾸면 `api.js` 만 고친다.
+설계 문서에 경로가 정해져 있지 않아 화면 쪽에서 제안한 형태다. 바꾸면 `src/api.ts` 만 고친다.
 키는 영어(i18n 경계), 사용자에게 보이는 값(`flow_status`, `decision_label`, 오류 `detail`)은 한국어.
 
 | 기능 | 요청 | 응답 |

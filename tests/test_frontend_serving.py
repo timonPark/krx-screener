@@ -23,14 +23,14 @@ def _no_db():
 
 
 @pytest.fixture
-def static_client(tmp_path):
+def static_client(tmp_path, frontend_dist):
     """DB 없이 정적 파일만 본다 (화면 파일을 읽는 데는 DB 가 필요 없다)."""
     deps = Dependencies(connect=_no_db, externals=make_externals(tmp_path), config=repo_config(), frontend_dir=FRONTEND)
     return TestClient(create_app(deps))
 
 
 @pytest.fixture
-def web(pg_conn, tmp_path):
+def web(pg_conn, tmp_path, frontend_dist):
     """진짜 테스트 DB + 화면 서빙."""
     url = os.environ[TEST_URL_ENV]
     deps = Dependencies(
@@ -61,7 +61,7 @@ def test_the_mock_mode_address_serves_the_same_page(static_client):
 def test_every_file_the_page_loads_is_served_with_a_type_the_browser_accepts(static_client):
     """index.html 이 부르는 파일과 JS 모듈이 import 하는 파일이 모두 열린다 (JS 는 모듈로 실행될 수 있는 형식으로)."""
     seen: set[str] = set()
-    pending = ["index.html"]
+    pending = ["index.html"]  # 화면이 도는 파일은 index.html 이 부르는 dist/*.js (TypeScript 빌드 결과)
     while pending:
         name = pending.pop()
         if name in seen:
@@ -72,23 +72,24 @@ def test_every_file_the_page_loads_is_served_with_a_type_the_browser_accepts(sta
         kind = response.headers["content-type"]
         if name.endswith(".js"):
             assert kind.startswith(("text/javascript", "application/javascript")), f"{name}: {kind}"  # 모듈은 JS 형식이어야 실행된다
-            pending += re.findall(r"""from\s+['"]\./([\w.-]+)['"]""", response.text)
+            folder = name.rpartition("/")[0]  # 모듈이 import 하는 './x.js' 는 그 모듈이 있는 폴더 기준이다
+            pending += [f"{folder}/{ref}" if folder else ref for ref in re.findall(r"""from\s+['"]\./([\w.-]+)['"]""", response.text)]
         elif name.endswith(".css"):
             assert kind.startswith("text/css"), f"{name}: {kind}"
         elif name.endswith(".html"):
-            pending += re.findall(r"""(?:src|href)=["']\./([\w.-]+)["']""", response.text)
+            pending += re.findall(r"""(?:src|href)=["']\./([\w./-]+)["']""", response.text)
     # 화면을 이루는 파일이 모두 따라왔는지 (파일을 새로 만들었는데 서빙에서 빠지는 일이 없도록)
-    assert {"index.html", "app.js", "api.js", "config.js", "mock.js", "styles.css"} <= seen
+    assert {"index.html", "dist/app.js", "dist/api.js", "dist/config.js", "dist/mock.js", "styles.css"} <= seen
 
 
 def test_the_screen_calls_the_api_on_the_same_address(static_client):
-    config = static_client.get("/config.js").text
+    config = static_client.get("/dist/config.js").text
     assert re.search(r"apiBase:\s*''", config)  # 빈 값이라 같은 주소의 /api 를 부른다 → CORS 가 필요 없다
 
 
 def test_the_mock_data_files_are_served_so_the_example_mode_keeps_working(static_client):
-    assert static_client.get("/mock.js").status_code == 200
-    assert "createMockApi" in static_client.get("/mock.js").text
+    assert static_client.get("/dist/mock.js").status_code == 200
+    assert "createMockApi" in static_client.get("/dist/mock.js").text
 
 
 # --- 화면과 API 가 한 주소 ---
