@@ -93,7 +93,7 @@ def test_organizing_saves_one_row_per_sector_and_one_market_row(client, repo, pg
     assert found["33"]["avg"] == pytest.approx(-0.6)
     assert found["33"]["ratings"]["Underweight"] == 2
     assert (found["26"]["foreign"], found["26"]["inst"]) == (200, 400)
-    assert "건설" in found["26"]["text"] and "평균 평가점수 +0.30" in found["26"]["text"]
+    assert "건설" in found["26"]["text"] and "평균 평가점수는 +0.30이며" in found["26"]["text"]
 
     overall = market(pg_conn, session.id)
     assert overall["scored"] == 4
