@@ -7,6 +7,8 @@ TradingAgents-KR 는 별도 프로세스(로컬 서버)이고 HTTP API 로만 �
 - ``GET  /api/runs/{run_id}`` 상태 스냅샷 (``pending``/``running``/``done``/``error``, ``decision``)
 - ``GET  /api/runs?limit=N``  최근 분석 목록 (종목·기준일·상태·생성 시각). 같은 종목·기준일의 분석이 아직 도는지 볼 때 쓴다
 - ``GET  /api/runs/{run_id}/events`` 진행 이벤트 (SSE). 보고서 번호는 여기의 ``report_saved`` 이벤트에만 있다
+- ``GET  /api/reports?ticker=&trade_date=&limit=N`` 저장된 보고서 목록 (보고서 번호·등급·기준일·에이전트별 등급, TradingAgents-KR #174).
+  ``run_id`` 를 몰라도 같은 종목·기준일의 **끝난 분석**을 찾을 수 있다 (``find_finished_report``, 실패로 기록됐지만 서버에서는 끝난 종목을 구할 때, #75)
 
 주의:
 - 종목 하나의 분석이 몇 분 걸리고 Max 플랜 쿼터를 쓴다. 호출하는 쪽(CLI)이 개수를 제한하고 확인한다.
@@ -18,8 +20,8 @@ TradingAgents-KR 는 별도 프로세스(로컬 서버)이고 HTTP API 로만 �
   분석 시작(POST)은 다시 시도하지 않는다: 서버가 분석을 하나 더 시작해 쿼터를 한 번 더 쓸 수 있다. 서버가 답한 오류(404, 5xx)도 다시 시도하지 않는다.
 - 보고서 번호(``report_id``, 예: ``028050_20261106_172435``)는 상태 스냅샷에 없다. 서버는 보고서를 저장한 직후 ``report_saved``
   이벤트를 내고 그 다음에 ``done`` 을 내므로, 분석이 끝난 뒤 이벤트를 다시 읽으면(서버가 처음부터 되풀이해 준다) 항상 있다.
-  보고서 목록(``GET /api/reports``)에서 종목코드로 찾는 방법은 쓰지 않는다: 같은 종목의 보고서가 여러 개일 수 있고 보고서 번호의
-  시각은 저장한 시각이라 어느 것이 이번 분석인지 가릴 수 없다.
+  이번 분석의 번호를 보고서 목록(``GET /api/reports``)에서 종목코드로 찾는 방법은 쓰지 않는다: 같은 종목의 보고서가 여러 개일 수 있고 보고서 번호의
+  시각은 저장한 시각이라 어느 것이 이번 분석인지 가릴 수 없다. (이미 실패로 기록된 종목을 구할 때만 같은 종목·기준일의 **가장 최근** 보고서를 쓴다.)
 - 영숫자 종목코드(예: ``0126Z0``)는 서버가 거절하므로 보내지 않고 "건너뜀" 으로 기록한다.
 """
 
@@ -47,6 +49,7 @@ REVIEW = "REVIEW"  # 서버가 등급을 읽지 못한 경우 (사람이 확인)
 
 DONE, FAILED, TIMEOUT, SKIPPED = "done", "error", "timeout", "skipped"
 
+REPORT_LIST_LIMIT = 20  # 종목·기준일로 거른 보고서 중 가장 최근 것만 쓴다. 필터를 모르는 옛 서버는 최근 목록을 주는데, 기준일이 없어 어차피 쓰지 않는다
 RUN_LIST_LIMIT = 20  # 서버가 기본으로 주는 개수. 도는 분석은 늘 최근이라 이만큼이면 된다 (응답에 보고서 본문이 들어 있어 무겁다)
 RUNNING_STATES = frozenset({"pending", "running"})  # 서버가 아직 끝내지 않은 분석
 # 상태 조회(GET)가 끊기면 이만큼 다시 시도한다 (#75). 서버가 막 닫은 연결(keep-alive)에 요청을 보내면 한 번 끊기는데, 새 연결로 바로 다시 보내면 된다.
@@ -108,6 +111,15 @@ def rating_label(rating: str | None) -> str:
 def server_accepts(code: str) -> bool:
     """서버가 받아 주는 종목코드인가 (숫자 6자리만)."""
     return bool(_SERVER_CODE_RE.fullmatch(code))
+
+
+@dataclass(frozen=True)
+class FinishedReport:
+    """서버에 저장된 끝난 분석의 보고서 (``GET /api/reports``). 에이전트별 등급은 서버가 읽은 것 그대로이고 읽지 못한 에이전트는 빠져 있다."""
+
+    report_id: str
+    decision: str  # 5단계 내부 값 (Buy 등)
+    agent_ratings: dict[str, str]
 
 
 @dataclass(frozen=True)
@@ -207,6 +219,46 @@ class AnalysisClient:
         if not running:
             return None
         return min(running, key=lambda run: str(run.get("created_at", "")))["run_id"]
+
+    def find_finished_report(self, ticker: str, trade_date: str) -> FinishedReport | None:
+        """서버에 같은 종목·기준일의 **끝난 분석 보고서**가 있으면 가장 최근 것, 없으면 None (#75).
+
+        서버가 끝낸 분석의 결과를 쿼터 없이 가져올 때 쓴다 (연결이 끊기거나 시간 초과로 기다리기를 멈춰 실패로 기록된 종목).
+        필터를 모르는 옛 서버는 다른 종목도 주고 기준일 필드가 없다 → 종목·기준일을 직접 확인해서, 확인할 수 없으면 "없음" 이다.
+        목록을 읽지 못해도 None 이다 (경고만 남긴다): 이 확인 때문에 다시 처리가 막히지는 않고 예전처럼 새로 분석한다.
+        """
+        try:
+            resp = self._call("GET", f"/api/reports?ticker={ticker}&trade_date={trade_date}&limit={REPORT_LIST_LIMIT}")
+            if resp.status_code != 200:
+                raise AnalysisError(f"보고서 목록 조회 실패 (HTTP {resp.status_code})")
+            reports = resp.json()
+        except (AnalysisError, ValueError) as exc:
+            logger.warning("서버의 보고서 목록을 읽지 못해 이미 끝난 분석이 있는지 확인하지 못했습니다 (%s): %s", ticker, exc)
+            return None
+        if not isinstance(reports, list):
+            logger.warning("서버의 보고서 목록 모양이 예상과 다릅니다 — 끝난 분석을 확인하지 못했습니다 (%s)", ticker)
+            return None
+        found = [
+            report
+            for report in reports
+            if isinstance(report, dict)
+            and report.get("ticker") == ticker
+            and report.get("trade_date") == trade_date
+            and report.get("decision") in RATING_LABELS
+            and isinstance(report.get("report_id"), str)
+            and _REPORT_ID_RE.fullmatch(report["report_id"])
+        ]
+        if not found:
+            return None
+        latest = max(found, key=lambda report: str(report.get("stamp", "")))  # 저장 시각이 가장 늦은 것
+        ratings = latest.get("agent_ratings")
+        return FinishedReport(
+            report_id=latest["report_id"],
+            decision=latest["decision"],
+            agent_ratings={a: r for a, r in ratings.items() if isinstance(a, str) and isinstance(r, str)}
+            if isinstance(ratings, dict)
+            else {},
+        )
 
     def snapshot(self, run_id: str) -> dict[str, Any]:
         """분석 상태. 연결이 끊기면 ``SNAPSHOT_RETRIES`` 번까지 다시 시도한다 (GET 이라 다시 보내도 서버에 아무 일도 더 생기지 않는다).

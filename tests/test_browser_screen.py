@@ -111,7 +111,7 @@ def test_processing_updates_the_screen_and_organizing_is_gated_until_everything_
     # 실패한 종목은 구간 처리에서 빠지고, 버튼으로만 다시 처리한다 (#77)
     assert facts["retry"] == {
         "label": "실패한 종목 다시 처리 (1개)", "disabled": False,
-        "hint": "실패한 1개를 다시 보냅니다 (약 5분, 분석 쿼터 최대 1번). 서버에서는 끝났는데 연결이 끊겨 실패로 기록된 종목도 쿼터를 다시 씁니다.",
+        "hint": "실패한 1개를 다시 처리합니다. 서버에 이미 끝난 분석이 있으면 쿼터 없이 가져오고, 없는 종목만 새로 분석합니다 (새로 분석하면 약 5분, 분석 쿼터 최대 1번).",
     }
     assert facts["failedOnlyRange"] == {
         "startDisabled": True, "hint": "이 구간의 종목은 모두 끝났거나 실패했습니다. 다른 구간을 고르세요 (실패한 종목은 아래 버튼으로 다시 처리합니다).",
@@ -133,7 +133,10 @@ def test_processing_updates_the_screen_and_organizing_is_gated_until_everything_
     assert facts["stale"]["shown"] is True
     assert facts["restored"]["stale"] is False
     # 확인창이 쿼터를 알리고, 취소하면 아무것도 보내지 않는다
-    confirm = "실패한 1개를 다시 처리합니다.\n약 5분이 걸리고 분석 쿼터를 최대 1번 씁니다.\n계속할까요?"
+    confirm = (
+        "실패한 1개를 다시 처리합니다.\n서버에 이미 끝난 분석이 있으면 쿼터 없이 가져오고, 없는 종목만 새로 분석합니다.\n"
+        "새로 분석하면 약 5분이 걸리고 분석 쿼터를 최대 1번 씁니다.\n계속할까요?"
+    )
     assert facts["cancelled"] == {"dialogs": [confirm], "failed": "1", "startedNothing": True}
     assert facts["confirmed"] == {"dialogs": [confirm]}
     assert sorted(int(r.split(":")[1]) for r in facts["restored"]["rows"]) == list(range(1, 9))
