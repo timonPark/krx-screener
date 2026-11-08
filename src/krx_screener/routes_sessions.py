@@ -266,10 +266,12 @@ class ProcessRequest(BaseModel):
     count: int = Field(ge=1)  # 거기서부터 처리할 개수
 
 
-def _start_processing(session_id: str, request: Request, background: BackgroundTasks, choose) -> JSONResponse:
+def _start_processing(
+    session_id: str, request: Request, background: BackgroundTasks, choose, recover: bool = False
+) -> JSONResponse:
     """구간 처리와 실패 재처리가 같이 쓰는 시작 절차. ``choose(items)`` 가 이번에 보낼 종목코드를 순서대로 돌려준다.
 
-    잠금(409)·서버 상태 확인(503)·응답 모양이 두 경로에서 같도록 한 곳에 둔다.
+    잠금(409)·서버 상태 확인(503)·응답 모양이 두 경로에서 같도록 한 곳에 둔다. ``recover`` 는 서버에 끝난 분석이 있으면 새로 보내지 않고 가져온다 (#75).
     """
     deps = request.app.state.deps
     conn = deps.connect()
@@ -288,7 +290,7 @@ def _start_processing(session_id: str, request: Request, background: BackgroundT
         if not todo:
             return JSONResponse(status_code=200, content={"started": False, "queued": 0})
         deps.externals.analysis.check_health()  # 서버가 꺼져 있으면 아무것도 시작하지 않고 한국어 503
-        background.add_task(process_codes, deps, conn, session.id, session.as_of, todo)
+        background.add_task(process_codes, deps, conn, session.id, session.as_of, todo, recover)
         handed_over = True
         return JSONResponse(status_code=202, content={"started": True, "queued": len(todo)})
     finally:
@@ -324,13 +326,15 @@ def process_failed(session_id: str, request: Request, background: BackgroundTask
 
     서버가 숫자 6자리 종목코드만 받아서, 다시 보내도 계속 실패하는 영숫자 코드는 뺀다 (쿼터는 쓰지 않지만 같은 사유로 즉시 실패할 뿐이다).
     다시 보낼 종목이 없으면 ``200 {"started": false, "queued": 0}``. 응답 모양·잠금(409)·서버 확인(503)은 ``/process`` 와 같다.
-    서버에서는 끝났는데 연결이 끊겨 실패로 기록된 종목도 다시 보내면 분석을 한 번 더 한다 (쿼터를 한 번 더 쓴다).
+    **종목마다 먼저 서버에 같은 종목·기준일의 끝난 분석(보고서)이 있는지 본다** (#75). 있으면 가장 최근 보고서의 결과를 저장하고(쿼터 0),
+    없을 때만 새로 보낸다. 연결이 끊기거나 시간 초과로 실패로 기록됐지만 서버에서는 끝난 종목이 여기에 해당한다.
+    서버가 보고서 목록의 필터·기준일(TradingAgents-KR #174)을 모르는 옛 버전이면 끝난 분석을 찾지 못해 예전처럼 새로 보낸다.
     """
 
     def choose(items: list) -> list[str]:
         return [i.code for i in items if i.state == "failed" and server_accepts(i.code)]
 
-    return _start_processing(session_id, request, background, choose)
+    return _start_processing(session_id, request, background, choose, recover=True)
 
 
 @router.post("/{session_id}/organize", response_model=None)

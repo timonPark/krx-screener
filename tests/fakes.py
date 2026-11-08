@@ -86,8 +86,10 @@ class FakeAnalysisServer:
         report_error: str | None = None,
         state_log_root: Path | None = None,
         agent_ratings: Mapping[str, Mapping[str, str | None]] | None = None,
+        finished_reports: Mapping[str, Any] | None = None,
     ) -> None:
         self.decisions = dict(decisions or {})
+        self.finished_reports = dict(finished_reports or {})  # 종목코드 → 서버에 이미 저장된 끝난 분석의 보고서 (FinishedReport) (#75)
         self.report_ids = dict(report_ids or {})  # 종목코드 → 보고서 번호. None 이면 보고서를 저장하지 않은 것
         self.report_error = report_error  # 보고서 번호를 읽는 호출이 이 한국어 오류로 실패한다
         # 분석이 끝나면 실제 서버처럼 상태 로그를 쓴다. None 이면 쓰지 않는다 (서버가 다른 컴퓨터에 있는 상황).
@@ -114,6 +116,9 @@ class FakeAnalysisServer:
 
     def find_running(self, ticker: str, trade_date: str) -> str | None:
         return self._running.get((ticker, trade_date))
+
+    def find_finished_report(self, ticker: str, trade_date: str) -> Any:
+        return self.finished_reports.get(ticker)
 
     def start(self, ticker: str, trade_date: str, effort: str) -> str:
         self.started.append((ticker, trade_date, effort))

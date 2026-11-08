@@ -6,6 +6,8 @@
 - 종목이 시작되면 ``running``, 끝나면 ``done``(등급 저장) 또는 ``failed``(사유 저장) 로 **즉시** 커밋해서, 조회가 진행 상황을
   볼 수 있게 한다 (연결을 자동 커밋으로 쓴다).
 - 한 종목의 실패나 예상하지 못한 오류가 나머지 종목을 멈추게 하지 않는다.
+- ``recover=True``(실패한 종목 다시 처리)이면 종목마다 먼저 서버에 같은 종목·기준일의 **끝난 분석**이 있는지 보고, 있으면 새로 보내지 않고
+  그 보고서의 결과를 저장한다 (쿼터 0, #75). 연결이 끊기거나 시간 초과로 실패로 기록됐지만 서버에서는 끝난 종목을 구한다. 없을 때만 새로 분석한다.
 - 분석 설정(``effort``)은 설정의 값(기본 ``low``)을 쓴다. 저장하지 않는다.
 - 세션 단위 잠금(#18)은 요청을 받은 쪽이 쥔 연결로 넘어온다. 이 함수는 그 연결로 일하고, 끝나면 연결을 닫아서 잠금을 푼다
   (프로세스가 죽어도 연결이 끊겨 DB 가 풀어 준다).
@@ -20,10 +22,10 @@ import logging
 import uuid
 from datetime import date
 
-from krx_screener.agent_ratings import read_agent_ratings
-from krx_screener.analysis import DONE, run_one
+from krx_screener.agent_ratings import AGENT_FIELDS, read_agent_ratings
+from krx_screener.analysis import DONE, FinishedReport, run_one
 from krx_screener.repository import NotFoundError, SessionRepository
-from krx_screener.scoring import score_ratings
+from krx_screener.scoring import RATING_POINTS, score_ratings
 
 logger = logging.getLogger(__name__)
 
@@ -50,7 +52,28 @@ def finish_item(conn, repo, session_id: uuid.UUID, code: str, as_of: date, outco
         repo.save_agent_ratings(session_id, code, ratings)  # 옛 등급 행은 새 값으로 통째로 바뀐다
 
 
-def process_codes(deps, conn, session_id: uuid.UUID, as_of: date, codes: list[str]) -> None:
+def recover_item(conn, repo, session_id: uuid.UUID, code: str, report: FinishedReport) -> None:
+    """서버에 이미 끝난 분석의 보고서로 종목을 완료로 저장한다 (분석을 새로 하지 않는다, #75).
+
+    에이전트별 등급은 서버가 보고서에서 읽어 준 것을 쓴다 (모르는 에이전트·5단계에 없는 값은 버린다). 분석 시간을 재지 않았으므로
+    ``elapsed_seconds`` 는 건드리지 않는다 (예상 시간 평균을 흐리지 않게).
+    """
+    ratings = {a: r for a, r in report.agent_ratings.items() if a in AGENT_FIELDS and r in RATING_POINTS}
+    scored = score_ratings(ratings)
+    with conn.transaction():
+        repo.mark_done(
+            session_id,
+            code,
+            decision=report.decision,
+            score=scored.score,
+            agents_rated=scored.rated,
+            agents_total=scored.total,
+            report_id=report.report_id,
+        )
+        repo.save_agent_ratings(session_id, code, ratings)
+
+
+def process_codes(deps, conn, session_id: uuid.UUID, as_of: date, codes: list[str], recover: bool = False) -> None:
     """``codes`` 를 순서대로 분석한다. ``deps`` 는 ``api.Dependencies`` 다.
 
     ``conn`` 은 세션의 처리 잠금을 쥔 자동 커밋 연결이다 (종목마다 바로 커밋 — 조회가 진행 상황을 볼 수 있다).
@@ -64,6 +87,12 @@ def process_codes(deps, conn, session_id: uuid.UUID, as_of: date, codes: list[st
                 item = repo.get_item(session_id, code)
                 if item is None:
                     continue  # 처리 도중에 세션이 지워진 경우
+                if recover:
+                    report = deps.externals.analysis.find_finished_report(code, as_of.isoformat())
+                    if report is not None:
+                        recover_item(conn, repo, session_id, code, report)
+                        logger.info("서버에 이미 끝난 분석을 가져왔습니다 (%s, %s)", code, report.report_id)
+                        continue
                 repo.mark_running(session_id, code)
                 outcome = run_one(
                     deps.externals.analysis,
