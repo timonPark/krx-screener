@@ -119,7 +119,21 @@ const scenarios: Record<string, Scenario> = {
     out.scores = (await ui.rows()).map((r: Row): string => `${r.seq}:${r.score.split('에이전트')[0].trim()}`);   // 화면에 보이는 점수 글 (에이전트 수는 뺀다)
     await ui.click('organize-btn');
     await page.waitFor(`document.getElementById('sort').value === 'rank'`, 15000);
+    // 정렬이 바뀐 뒤에도 정리 응답 다음의 조회가 끝나야 순위와 요약이 그려진다: 요약 카드가 나타날 때까지 기다린 뒤에 읽는다
+    // (기다리지 않으면 순위가 그려지기 전의 행을 읽을 수 있다)
+    await page.waitFor(`!document.getElementById('summary-card').hidden`, 15000);
     out.organized = { sort: await page.eval<string>(`document.getElementById('sort').value`), stale: await ui.shown('stale-notice'), rows: (await ui.rows()).map((r: Row): string => `${r.seq}:${r.rank}`) };
+    const reportHref: string = await page.eval<string>(`document.getElementById('report-link').getAttribute('href')`);
+    out.summary = {
+      assessment: await ui.text('market-text'),
+      stats: await page.eval<string[]>(`[...document.querySelectorAll('#market-stats dt')].map((e) => e.textContent.trim())`),
+      themes: await page.eval<string[]>(`[...document.querySelectorAll('#theme-rows tr')].map((tr) => tr.querySelector('.name').textContent.trim())`),
+      interpretations: await page.eval<number>(`[...document.querySelectorAll('#theme-rows td.interp')].filter((td) => td.textContent.trim().length > 0).length`),
+      linkShown: await ui.shown('report-link'),
+      reportHref,
+      // 링크가 가리키는 보고서가 실제로 내려온다 (마크다운 첨부 파일)
+      report: await page.eval<[number, string | null, string | null, string]>(`fetch('${reportHref}').then(async (r) => [r.status, r.headers.get('content-type'), r.headers.get('content-disposition'), (await r.text()).split('\\n')[0]])`),
+    };
     await ctl({ errors: [] });                                              // 실패했던 종목이 이번에는 성공한다
     page.acceptDialogs = false;                                             // 확인창에서 취소하면 아무것도 보내지 않는다
     await ui.click('retry-btn');
@@ -135,7 +149,7 @@ const scenarios: Record<string, Scenario> = {
     out.stale = { shown: await ui.shown('stale-notice'), organizeHint: await ui.text('organize-hint') };
     await ui.click('organize-btn');
     await page.waitFor(`document.getElementById('stale-notice').hidden`, 15000);
-    out.restored = { stale: await ui.shown('stale-notice'), rows: (await ui.rows()).map((r: Row): string => `${r.seq}:${r.rank}`) };
+    out.restored = { stale: await ui.shown('stale-notice'), rows: (await ui.rows()).map((r: Row): string => `${r.seq}:${r.rank}`), assessment: await ui.text('market-text'), summaryMeta: await ui.text('summary-meta') };
   },
 
   // 오류 알림: 동작 오류는 갱신이 성공해도 남고, 조회 오류는 다음 조회가 성공하면 사라진다

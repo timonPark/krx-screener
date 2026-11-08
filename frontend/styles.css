@@ -184,3 +184,14 @@ tr.is-running { background: #F7F5FE; }
 .estimate { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); padding-bottom: 4px; flex: 1 1 200px; }
 .estimate b { color: var(--text); }
 .organize-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; font-size: 12px; color: var(--muted); }
+
+/* 정리 요약 */
+.summary h3 { margin: 4px 0 0; font-size: 13px; font-weight: 700; color: var(--text-2); }
+.summary h3 .muted { font-weight: 400; font-size: 12px; margin-left: 6px; }
+.link-btn { display: inline-flex; align-items: center; height: 36px; text-decoration: none; }
+.stats { margin: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px 24px; font-size: 13px; }
+.stats > div { display: flex; flex-direction: column; gap: 2px; }
+.stats dt { color: var(--muted); font-size: 12px; }
+.stats dd { margin: 0; word-break: keep-all; }   /* 한글은 글자 중간에서 줄을 바꾸지 않는다 (예: 매도) */
+.theme-table { min-width: 960px; }
+.theme-table .interp { min-width: 360px; max-width: 520px; font-size: 12px; color: var(--text-2); line-height: 1.6; white-space: normal; }

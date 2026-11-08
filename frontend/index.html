@@ -145,12 +145,45 @@
 
     <div class="card panel organize">
       <div class="panel-head"><h2>정리 (순위 매기기)</h2></div>
-      <p class="body">모든 종목이 처리된 뒤에만 실행됩니다. 점수 높은 순, 같으면 순번이 앞선 종목이 위. 실패한 종목은 비교에서 빠집니다.</p>
+      <p class="body">모든 종목이 처리된 뒤에만 실행됩니다. 점수 높은 순, 같으면 순번이 앞선 종목이 위. 실패한 종목은 비교에서 빠집니다. 정리하면 업종별 해석과 종합 평가도 함께 저장되어 아래에 나옵니다.</p>
       <div class="organize-row">
         <button id="organize-btn" class="btn" type="button">정리 실행</button>
         <span id="organize-hint"></span>
       </div>
     </div>
+  </section>
+
+  <!-- 4. 정리 요약: 정리할 때 저장한 업종별 해석과 종합 평가 (정리하기 전에는 숨김) -->
+  <section id="summary-card" class="card panel summary" aria-label="정리 요약" hidden>
+    <div class="panel-head">
+      <h2>정리 요약</h2>
+      <span id="summary-meta" class="muted"></span>
+      <a id="report-link" class="btn outline link-btn" href="#" download>보고서 내려받기 (.md)</a>
+      <span id="report-note" class="muted" hidden>예시 모드에서는 보고서를 내려받을 수 없습니다.</span>
+    </div>
+    <h3>종합 평가</h3>
+    <p id="market-text" class="body"></p>
+    <dl id="market-stats" class="stats"></dl>
+    <h3>업종(테마)별 해석 <span class="muted">네이버 업종 기준 · 순위에 들어간 후보만</span></h3>
+    <div class="scroll">
+      <table class="theme-table">
+        <thead>
+          <tr>
+            <th scope="col">업종</th>
+            <th class="r" scope="col">후보</th>
+            <th class="r" scope="col">평균 평가점수</th>
+            <th scope="col">등급</th>
+            <th scope="col">수급 상태</th>
+            <th class="r" scope="col">평균 RSI</th>
+            <th class="r" scope="col">외국인 5일(주)</th>
+            <th class="r" scope="col">기관 5일(주)</th>
+            <th scope="col">해석</th>
+          </tr>
+        </thead>
+        <tbody id="theme-rows"></tbody>
+      </table>
+    </div>
+    <p id="summary-note"></p>
   </section>
 
 </div>

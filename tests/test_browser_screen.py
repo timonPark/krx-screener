@@ -129,9 +129,22 @@ def test_processing_updates_the_screen_and_organizing_is_gated_until_everything_
     assert organized["sort"] == "rank" and organized["stale"] is False
     ranks = dict(r.split(":") for r in organized["rows"])
     assert ranks["4"] == "—" and sorted(int(v) for k, v in ranks.items() if k != "4") == list(range(1, 8))
+    # 정리하면 업종별 해석과 종합 평가가 화면에 나오고, 보고서를 내려받을 수 있다 (실패한 4번 종목은 요약에서 빠진다)
+    summary = facts["summary"]
+    assert "점수가 있는 후보 7개" in summary["assessment"]
+    assert {"점수가 있는 후보", "평균 평가점수", "등급", "수급 상태"} <= set(summary["stats"])
+    assert len(summary["themes"]) == 7 and "반도체와반도체장비" not in summary["themes"]
+    assert summary["interpretations"] == 7  # 업종마다 해석 문장이 있다
+    assert summary["linkShown"] is True and summary["reportHref"].endswith("/report")
+    status, content_type, disposition, first_line = summary["report"]
+    assert status == 200 and content_type.startswith("text/markdown")
+    assert disposition == 'attachment; filename="krx-screener-summary-2026-11-05.md"'
+    assert first_line == "# KRX Screener 정리 요약 — 2026-11-05"
     # 정리 뒤에 종목을 다시 분석하면 순위가 낡았다고 알리고, 다시 정리하면 사라진다
     assert facts["stale"]["shown"] is True
     assert facts["restored"]["stale"] is False
+    assert "점수가 있는 후보 8개" in facts["restored"]["assessment"]  # 다시 정리하면 요약도 새로 만들어진다
+    assert "낡음" not in facts["restored"]["summaryMeta"]
     # 확인창이 쿼터를 알리고, 취소하면 아무것도 보내지 않는다
     confirm = (
         "실패한 1개를 다시 처리합니다.\n서버에 이미 끝난 분석이 있으면 쿼터 없이 가져오고, 없는 종목만 새로 분석합니다.\n"

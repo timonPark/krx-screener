@@ -7,7 +7,7 @@ import type { Notice, NoticeSource } from './notice.js';
 import { reportHref } from './report.js';
 import { retryPlan, serverAccepts } from './retry.js';
 import type { RetryPlan } from './retry.js';
-import type { Build, BuildState, Counts, Item, ItemState, Session, SessionDetail } from './types.js';
+import type { Build, BuildState, Counts, Item, ItemState, Session, SessionDetail, Summary, ThemeSummary } from './types.js';
 
 // id 로 요소를 찾는다. 없으면 어느 id 인지 알려 주며 멈춘다 (index.html 과 어긋난 것이다).
 function $<T extends HTMLElement = HTMLElement>(id: string): T {
@@ -199,6 +199,7 @@ function render(): void {
   renderRows(items, total);
   renderProcess(items, total);
   renderOrganize(c, d);
+  renderSummary(d);
 }
 
 function renderBuild(build: Build): void {
@@ -397,6 +398,74 @@ function renderOrganize(c: Counts, d: SessionDetail | null): void {
       ? `최신 순위입니다 (${fmtDateTime(d.ranked_at)})`
       : (c.failed ? `실패 ${c.failed}개는 비교에서 제외됩니다` : '실행할 수 있습니다');
   }
+}
+
+// 정리 요약 (정리할 때 저장한 업종별 해석과 종합 평가). 정리하기 전에는 보이지 않는다.
+// 개수 분포 글: 키는 한국어 표기이고 순서가 정해져 있다. hideZero 면 0 인 항목을 뺀다
+function distText(counts: Record<string, number>, hideZero: boolean): string {
+  const parts: string[] = Object.entries(counts)
+    .filter(([, n]: [string, number]): boolean => !hideZero || n > 0)
+    .map(([label, n]: [string, number]): string => `${label} ${n}`);
+  return parts.join(' · ') || '—';
+}
+const asNumber = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null);
+const fmtSigned = (n: number | null): string => (n == null ? '—' : `${n > 0 ? '+' : ''}${fmtInt(n)}`);
+const fmtAvgScore = (s: number | null): string => (s == null ? '—' : fmtScore(s) || '0');
+
+// 종합 평가의 수치 칸: [이름, 값]
+function marketStats(s: Summary): Array<[string, string]> {
+  const m: Summary['market'] = s.market;
+  const rows: Array<[string, string]> = [
+    ['점수가 있는 후보', `${fmtInt(m.scored_count)}개`],
+    ['평균 평가점수', fmtAvgScore(m.avg_score)],
+    ['등급', distText(m.rating_counts, false)],
+    ['수급 상태', distText(m.flow_counts, false)],
+  ];
+  const u: Record<string, unknown> | null = m.universe_stats;
+  const evaluated: number | null = asNumber(u?.evaluated);
+  if (u && evaluated) {
+    rows.push(['시세를 확인한 전종목', `${fmtInt(evaluated)}개`]);
+    const failEach: Record<string, unknown> = (u.fail_each ?? {}) as Record<string, unknown>;
+    Object.keys(failEach).filter((k: string): boolean => k.startsWith('above_ma')).sort((a: string, b: string): number => (a.length - b.length) || a.localeCompare(b)).forEach((k: string): void => {
+      const fail: number | null = asNumber(failEach[k]);
+      if (fail != null) rows.push([`${k.replace('above_ma', '')}일선 위`, `${((100 * (evaluated - fail)) / evaluated).toFixed(1)}%`]);
+    });
+    const cand: number | null = asNumber(u.candidates);
+    if (cand != null) rows.push(['후보 조건 통과', `${fmtInt(cand)}개 (${((100 * cand) / evaluated).toFixed(1)}%)`]);
+  }
+  return rows;
+}
+
+function themeRow(t: ThemeSummary): string {
+  return `<tr>
+      <td class="nw"><div class="name">${esc(t.name)}</div><div class="sub"><span class="num">${esc(t.code) || '—'}</span></div></td>
+      <td class="r num">${t.item_count}</td>
+      <td class="r num">${fmtAvgScore(t.avg_score)}</td>
+      <td class="nw">${esc(distText(t.rating_counts, true))}</td>
+      <td class="nw">${esc(distText(t.flow_counts, false))}</td>
+      <td class="r num">${t.avg_rsi == null ? '—' : Math.round(t.avg_rsi)}</td>
+      <td class="r num">${fmtSigned(t.foreign_net_5d)}</td>
+      <td class="r num">${fmtSigned(t.institution_net_5d)}</td>
+      <td class="interp">${esc(t.interpretation)}</td>
+    </tr>`;
+}
+
+function renderSummary(d: SessionDetail | null): void {
+  const s: Summary | null = d?.summary ?? null;
+  $('summary-card').hidden = !s;
+  if (!d || !s) return;
+  $('summary-meta').textContent = `정리 ${fmtDateTime(s.created_at)}${d.rank_stale ? ' · 낡음 (정리 이후 다시 분석된 종목이 있습니다)' : ''}`;
+  const href: string | null = api.reportHref(d.session.id);
+  const link: HTMLAnchorElement = $<HTMLAnchorElement>('report-link');
+  link.hidden = !href;
+  link.href = href ?? '#';
+  $('report-note').hidden = !!href;
+  $('market-text').textContent = s.market.assessment;
+  $('market-stats').innerHTML = marketStats(s).map(([name, value]: [string, string]): string => `<div><dt>${esc(name)}</dt><dd>${esc(value)}</dd></div>`).join('');
+  $('theme-rows').innerHTML = s.themes.map(themeRow).join('');
+  $('summary-note').textContent = s.themes.length
+    ? '평가점수는 위 조회 표와 같이 저장값에 100 을 곱해 보입니다. 해석 문장과 내려받는 보고서는 저장값(−2 ~ +2)으로 적습니다.'
+    : '점수가 있는 후보가 없어 업종별 해석이 없습니다.';
 }
 
 // ---------- 동작 ----------

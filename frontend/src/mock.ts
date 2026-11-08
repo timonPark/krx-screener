@@ -5,8 +5,8 @@ import { config } from './config.js';
 import { serverAccepts } from './retry.js';
 import type { ApiError } from './api.js';
 import type {
-  Api, ApiErrorBody, Build, BuildStage, Counts, Criteria, Item, OrganizeResult, ProcessResult, RunningStage, Session,
-  SessionDetail,
+  Api, ApiErrorBody, Build, BuildStage, Counts, Criteria, Item, MarketSummary, OrganizeResult, ProcessResult, RunningStage, Session,
+  SessionDetail, Summary, ThemeSummary,
 } from './types.js';
 
 // 종목 한 줄의 처리 결과 예시: [등급, 점수, 등급을 낸 에이전트 수]
@@ -28,6 +28,7 @@ interface MockSession {
   processing: boolean;
   ranked_at: string | null;
   rank_stale: boolean;
+  summary: Summary | null;
 }
 
 // ApiError 는 api.ts 가 mock.ts 를 불러서 거꾸로 import 하면 순환이 되므로 생성자만 받는다
@@ -91,8 +92,55 @@ function makeSession(asOf: string, seeded: boolean, criteria: Criteria | null = 
   });
   return {
     session: { id, as_of: asOf, created_at: new Date().toISOString(), total: items.length, build: { ...READY }, criteria },
-    items, processing: false, ranked_at: null, rank_stale: false,
+    items, processing: false, ranked_at: null, rank_stale: false, summary: null,
   };
+}
+
+// ---------- 정리 요약 (예시) ----------
+// 백엔드의 summary.py 가 하는 일을 흉내 낸다: 순위에 들어간 종목(끝났고 점수가 있는 종목)만 업종별로 묶어 센다.
+// 문장은 화면 확인용 예시라 백엔드의 문장 틀과 같지 않다. 예시 모드에서만 쓰인다.
+const RATING_KEYS: string[] = ['매수', '비중 확대', '보유', '비중 축소', '매도'];
+const FLOW_KEYS: string[] = ['양호', '부분', '약함', '미확인'];
+
+const countBy = (keys: string[], values: string[]): Record<string, number> =>
+  Object.fromEntries(keys.map((k: string): [string, number] => [k, values.filter((v: string): boolean => v === k).length]));
+const mean = (values: number[]): number | null => (values.length ? values.reduce((a: number, b: number): number => a + b, 0) / values.length : null);
+const sum = (values: Array<number | null>): number | null => {
+  const known: number[] = values.filter((v: number | null): v is number => v != null);
+  return known.length ? known.reduce((a: number, b: number): number => a + b, 0) : null;
+};
+
+function mockSummary(items: MockItem[], asOf: string): Summary {
+  const ranked: MockItem[] = items.filter((it: MockItem): boolean => it.state === 'done' && it.score != null);
+  const overall: number | null = mean(ranked.map((it: MockItem): number => it.score ?? 0));
+  const bySector: Map<string, MockItem[]> = new Map();
+  ranked.forEach((it: MockItem): void => { bySector.set(it.sector_name, [...(bySector.get(it.sector_name) ?? []), it]); });
+  const themes: ThemeSummary[] = [...bySector.entries()].map(([name, members]: [string, MockItem[]]): ThemeSummary => {
+    const avg: number = mean(members.map((it: MockItem): number => it.score ?? 0)) ?? 0;
+    const flows: Record<string, number> = countBy(FLOW_KEYS, members.map((it: MockItem): string => it.flow_status));
+    const flowing: MockItem[] = members.filter((it: MockItem): boolean => it.foreign_net_5d != null && it.institution_net_5d != null);
+    const rsi: number | null = mean(members.map((it: MockItem): number => it.rsi ?? 0));
+    return {
+      code: name, name, item_count: members.length, avg_score: avg,
+      rating_counts: countBy(RATING_KEYS, members.map((it: MockItem): string => it.decision_label)),
+      flow_counts: flows, avg_rsi: rsi,
+      foreign_net_5d: flowing.length ? sum(flowing.map((it: MockItem): number | null => it.foreign_net_5d)) : null,
+      institution_net_5d: flowing.length ? sum(flowing.map((it: MockItem): number | null => it.institution_net_5d)) : null,
+      interpretation: `${name}: (예시 문장) 점수가 있는 후보 ${members.length}개의 평균 평가점수는 ${avg.toFixed(2)}입니다.`,
+    };
+  }).sort((a: ThemeSummary, b: ThemeSummary): number => (b.item_count - a.item_count) || a.code.localeCompare(b.code));
+  const market: MarketSummary = {
+    scored_count: ranked.length,
+    avg_score: overall,
+    rating_counts: countBy(RATING_KEYS, ranked.map((it: MockItem): string => it.decision_label)),
+    flow_counts: countBy(FLOW_KEYS, ranked.map((it: MockItem): string => it.flow_status)),
+    universe_stats: {
+      listing_total: PRICE_COUNT + 40, after_static: PRICE_COUNT, evaluated: 2200, candidates: ranked.length, undetermined: 60, zero_volume_excluded: 30,
+      fail_each: { avg_trading_value: 1500, above_ma20: 900, above_ma60: 1100 },
+    },
+    assessment: `${asOf} 기준 (예시 문장) 점수가 있는 후보 ${ranked.length}개의 평균 평가점수는 ${(overall ?? 0).toFixed(2)}입니다.`,
+  };
+  return { created_at: new Date().toISOString(), market, themes };
 }
 
 function finish(item: MockItem, reportStamp?: string): void {
@@ -175,7 +223,7 @@ export function createMockApi(ApiErrorCtor: ApiErrorClass): Api {
   const delay = <T>(make: () => T): Promise<T> => new Promise<T>((ok: (value: T) => void): void => { setTimeout((): void => ok(structuredClone(make())), 150); });
   const view = (s: MockSession): SessionDetail => ({
     session: s.session, processing: s.processing, ranked_at: s.ranked_at, rank_stale: s.rank_stale, counts: counts(s.items),
-    items: s.items.map(publicItem),
+    items: s.items.map(publicItem), summary: s.summary,
   });
 
   return {
@@ -223,7 +271,9 @@ export function createMockApi(ApiErrorCtor: ApiErrorClass): Api {
         .forEach((it: MockItem, k: number): void => { it.rank = k + 1; });
       s.ranked_at = new Date().toISOString();
       s.rank_stale = false;
+      s.summary = mockSummary(s.items, s.session.as_of);
       return delay((): OrganizeResult => ({ ranked: c.done, unscored: 0 }));
     },
+    reportHref(): null { return null; },   // 예시 모드는 서버가 없어 내려받을 파일이 없다
   };
 }

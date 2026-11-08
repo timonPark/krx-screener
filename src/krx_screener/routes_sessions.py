@@ -6,7 +6,8 @@
 - ``GET  /api/sessions/{id}``  (``id`` 에 ``latest`` 가능) → 세션 전체 조회 (#23)
 - ``POST /api/sessions/{id}/process``  ``{"offset": 0, "count": 10}`` → 구간 처리 시작 (#17). 실패한 종목은 보내지 않는다 (#77)
 - ``POST /api/sessions/{id}/process-failed``  → 세션의 실패한 종목을 다시 처리 (#77)
-- ``POST /api/sessions/{id}/organize``  → 정리: 끝난 종목에 점수 순위를 매긴다 (#24)
+- ``POST /api/sessions/{id}/organize``  → 정리: 끝난 종목에 점수 순위를 매기고 업종별 해석·종합 평가를 저장한다 (#24)
+- ``GET  /api/sessions/{id}/report``  → 정리 요약 마크다운 보고서 (첨부 파일). 정리한 적이 없으면 409
 
 기준일은 거래일이어야 한다. 입력이 잘못되면 422, 거래일이나 전종목 목록을 받을 수 없는 외부 장애면 503 이고,
 둘 다 ``{"detail": "한국어 메시지"}`` 다.
@@ -24,7 +25,7 @@ from datetime import UTC, date, datetime
 
 import psycopg
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, Field
 
 from krx_screener.analysis import RATING_LABELS, REVIEW, server_accepts
@@ -32,8 +33,10 @@ from krx_screener.asof import resolve_as_of
 from krx_screener.config import criteria_of
 from krx_screener.flow import STATUS_LABELS
 from krx_screener.processing import process_codes
-from krx_screener.repository import Item, NotFoundError, Session, SessionRepository
+from krx_screener.repository import Item, NotFoundError, Session, SessionRepository, StoredSummary
 from krx_screener.session_build import build_session
+from krx_screener.summary import FLOW_ORDER, RATING_ORDER
+from krx_screener.summary_report import render_markdown
 
 router = APIRouter(prefix="/api/sessions")
 
@@ -158,6 +161,73 @@ class CountsOut(BaseModel):
     failed: int
 
 
+def _korean_counts(counts: dict[str, int], codes: tuple[str, ...], labels: dict[str, str], extra: tuple[str, ...] = ()) -> dict[str, int]:
+    """영어 코드값 → 개수 를 한국어 표기 → 개수 로 바꾼다. 순서는 ``codes`` 순서로 고정한다 (DB 의 jsonb 는 키 순서를 지키지 않는다).
+
+    ``extra`` 코드(예: REVIEW)는 개수가 있을 때만 넣고 표기는 코드 그대로다.
+    """
+    out = {labels[code]: counts.get(code, 0) for code in codes}
+    out.update({code: counts[code] for code in extra if counts.get(code)})
+    return out
+
+
+class ThemeSummaryOut(BaseModel):
+    """업종(테마) 한 줄의 요약. 테마는 네이버 업종이고 ``code`` 가 빈 문자열이면 업종을 읽지 못한 종목들이다."""
+
+    code: str
+    name: str
+    item_count: int  # 순위에 들어간 후보 수
+    avg_score: float  # 저장값 (−2 ~ +2). 화면은 100 을 곱해 보여 준다
+    rating_counts: dict[str, int]  # 한국어 등급 → 후보 수 (매수 → 매도 순서)
+    flow_counts: dict[str, int]  # 한국어 수급 상태 → 후보 수 (양호 → 미확인 순서)
+    avg_rsi: float | None
+    foreign_net_5d: int | None  # 수급을 읽은 후보의 합 (주). 읽은 후보가 없으면 null (0 이 아니다)
+    institution_net_5d: int | None
+    interpretation: str  # 수치로 만든 해석 문장
+
+
+class MarketSummaryOut(BaseModel):
+    scored_count: int
+    avg_score: float | None  # 점수가 있는 후보가 없으면 null
+    rating_counts: dict[str, int]
+    flow_counts: dict[str, int]
+    universe_stats: dict | None  # 목록을 만들 때 저장한 전종목 수치. 저장하기 전에 만든 목록은 null
+    assessment: str  # 수치로 만든 종합 평가 문장
+
+
+class SummaryOut(BaseModel):
+    """정리할 때 저장한 업종별 해석과 종합 평가. 정리한 적이 없으면 세션 조회의 ``summary`` 는 null 이다."""
+
+    created_at: str  # 정리한 시각 (UTC)
+    market: MarketSummaryOut
+    themes: list[ThemeSummaryOut]  # 후보가 많은 업종 순
+
+    @classmethod
+    def of(cls, stored: StoredSummary) -> SummaryOut:
+        market = stored.market
+        return cls(
+            created_at=_utc(stored.created_at),
+            market=MarketSummaryOut(
+                scored_count=market.scored_count,
+                avg_score=market.avg_score,
+                rating_counts=_korean_counts(market.rating_counts, RATING_ORDER, RATING_LABELS, (REVIEW,)),
+                flow_counts=_korean_counts(market.flow_counts, FLOW_ORDER, STATUS_LABELS),
+                universe_stats=market.universe_stats,
+                assessment=market.assessment,
+            ),
+            themes=[
+                ThemeSummaryOut(
+                    code=t.code, name=t.name, item_count=t.item_count, avg_score=t.avg_score,
+                    rating_counts=_korean_counts(t.rating_counts, RATING_ORDER, RATING_LABELS, (REVIEW,)),
+                    flow_counts=_korean_counts(t.flow_counts, FLOW_ORDER, STATUS_LABELS),
+                    avg_rsi=t.avg_rsi, foreign_net_5d=t.foreign_net_5d, institution_net_5d=t.institution_net_5d,
+                    interpretation=t.interpretation,
+                )
+                for t in stored.themes
+            ],
+        )
+
+
 class SessionDetailOut(BaseModel):
     session: SessionOut
     processing: bool  # 이 세션을 처리 중인지. true 면 화면이 주기적으로 다시 부른다
@@ -165,6 +235,7 @@ class SessionDetailOut(BaseModel):
     rank_stale: bool  # 정리 이후 재분석된 종목이 있으면 true
     counts: CountsOut
     items: list[ItemOut]  # 세션 전체, 순번 순
+    summary: SummaryOut | None  # 정리할 때 저장한 업종별 해석과 종합 평가. 정리한 적이 없으면 null
 
 
 @router.post("", status_code=202, response_model=SessionOut)
@@ -251,6 +322,7 @@ def get_session(session_id: str, request: Request) -> SessionDetailOut:
         build_state = repo.effective_build_state(session)
         processing = build_state == "ready" and (locked_before or repo.is_locked(session.id))
         rank_stale = repo.rank_is_stale(session.id)
+        stored = repo.stored_summary(session.id)
     return SessionDetailOut(
         session=SessionOut.of(session, build_state),
         processing=processing,
@@ -258,6 +330,27 @@ def get_session(session_id: str, request: Request) -> SessionDetailOut:
         rank_stale=rank_stale,  # 정리 뒤에 분석이 바뀌어 다시 정리하면 순위가 달라질 수 있으면 true (#25)
         counts=CountsOut(**counts),
         items=[ItemOut.of(i) for i in items],
+        summary=SummaryOut.of(stored) if stored else None,
+    )
+
+
+@router.get("/{session_id}/report", response_model=None)
+def get_report(session_id: str, request: Request) -> Response:
+    """정리 요약을 마크다운 보고서로 내려받는다 (``latest`` 가능). 정리한 적이 없으면 ``409``.
+
+    정리할 때 저장한 문장을 그대로 싣는다 (``summary_report``). 응답은 ``text/markdown`` 첨부 파일이고 이름은 ``krx-screener-summary-<기준일>.md`` 다.
+    """
+    with request.app.state.deps.connect() as conn:
+        repo = SessionRepository(conn)
+        session = _find_session(repo, session_id)
+        stored = repo.stored_summary(session.id)
+        if stored is None:
+            return JSONResponse(status_code=409, content={"detail": "정리를 먼저 실행하세요. 정리해야 요약 보고서가 만들어집니다."})
+        body = render_markdown(session.as_of, repo.counts(session.id), repo.rank_is_stale(session.id), stored)
+    return Response(
+        content=body,
+        media_type="text/markdown; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="krx-screener-summary-{session.as_of.isoformat()}.md"'},
     )
 
 
