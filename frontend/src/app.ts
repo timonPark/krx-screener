@@ -252,7 +252,7 @@ function statusSub(it: Item): string {
   if (it.state === 'done') return fmtDateTime(it.analyzed_at);
   if (it.state === 'failed') {
     const why: string = it.error_message || '실패';
-    return serverAccepts(it.code) ? `${why} · 아래 '실패한 종목 다시 처리' 로 재시도` : why;   // 영숫자 코드는 다시 보내도 실패해서 재시도 안내를 붙이지 않는다
+    return serverAccepts(it.code) ? `${why} · 아래 '실패한 종목 다시 처리' 로 재시도` : why;   // 서버가 받지 않는 형식의 코드는 다시 보내도 실패해서 재시도 안내를 붙이지 않는다
   }
   if (it.state === 'running') return '분석 중';
   return '';
@@ -355,12 +355,12 @@ function renderProcess(items: Item[], total: number): void {
   renderRetry(items, processing, build);
 }
 
-// "실패한 종목 다시 처리" 버튼 (#77): 세션 전체의 실패한 종목을 한꺼번에 다시 보낸다. 영숫자 코드는 서버가 받지 않아 뺀다.
+// "실패한 종목 다시 처리" 버튼 (#77): 세션 전체의 실패한 종목을 한꺼번에 다시 보낸다. 서버가 받지 않는 형식의 코드는 뺀다.
 // 서버에 이미 끝난 분석이 있으면 백엔드가 쿼터 없이 가져오고(#75), 없는 종목만 새로 분석한다 (쿼터).
 function renderRetry(items: Item[], processing: boolean, build: Build): void {
   const { retry, excluded }: RetryPlan = retryPlan(items);
   const n: number = retry.length;
-  const note: string = excluded.length ? ` 영숫자 코드 ${excluded.length}개는 서버가 받지 않아 뺍니다.` : '';
+  const note: string = excluded.length ? ` 서버가 받지 않는 형식의 코드 ${excluded.length}개는 뺍니다.` : '';
   let hint: string;
   let disabled: boolean = state.busy || !state.data || build.state !== 'ready' || processing;
   if (build.state !== 'ready') {
@@ -369,7 +369,7 @@ function renderRetry(items: Item[], processing: boolean, build: Build): void {
     hint = '이 세션을 처리하는 동안에는 누를 수 없습니다.';
   } else if (n === 0) {
     hint = excluded.length
-      ? `다시 보낼 실패한 종목이 없습니다. 영숫자 코드 ${excluded.length}개는 서버가 받지 않아 다시 처리해도 실패합니다.`
+      ? `다시 보낼 실패한 종목이 없습니다. 서버가 받지 않는 형식의 코드 ${excluded.length}개는 다시 처리해도 실패합니다.`
       : '실패한 종목이 없습니다.';
     disabled = true;
   } else {

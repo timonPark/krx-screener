@@ -29,7 +29,7 @@ from krx_screener.routes_sessions import (
 FRONTEND = Path(__file__).resolve().parents[1] / "frontend"
 SRC = FRONTEND / "src"  # TypeScript 소스
 DIST = FRONTEND / "dist"  # tsc 가 만든 결과 (Node 로 불러 확인하는 것은 이쪽)
-REPORT_ID = re.compile(r"^\d{6}_\d{8}_\d{6}$")  # 028050_20261106_172435
+REPORT_ID = re.compile(r"^[0-9A-Z]{6}_\d{8}_\d{6}$")  # 028050_20261106_172435, 영숫자 코드는 0126Z0_20261108_120000
 
 
 def _node_major() -> int:
@@ -451,14 +451,14 @@ process.exit(0);
 def test_the_screens_rule_for_codes_the_server_accepts_matches_the_backends():
     from krx_screener.analysis import server_accepts
 
-    codes = ["005930", "0126Z0", "00680K", "12345", "1234567", "00593 ", "", "abcdef", "000010"]
+    codes = ["005930", "0126Z0", "00680K", "0088M0", "12345", "1234567", "00593 ", "", "abcdef", "0126z0", "0126Z", "000010", "００５９３０", "005930\n"]  # 전각 숫자·줄바꿈이 붙은 코드도 같게 거절한다
     got = run_js(
         f"""
 const {{ serverAccepts }} = await import(dir + '/retry.js');
 console.log(JSON.stringify({json.dumps(codes)}.map((c) => serverAccepts(c))));
 """
     )
-    assert got == [server_accepts(c) for c in codes]  # 숫자 6자리만. 영숫자 코드·우선주는 다시 보내도 서버가 거절한다
+    assert got == [server_accepts(c) for c in codes]  # 대문자 영숫자 6자만 (TradingAgents-KR #181). 소문자·5자·7자는 서버가 거절한다
 
 
 @needs_node
@@ -467,11 +467,11 @@ def test_the_retry_plan_leaves_out_failed_codes_the_server_would_refuse():
         """
 const { retryPlan } = await import(dir + '/retry.js');
 const it = (code, state) => ({ code, state });
-const plan = retryPlan([it('000010', 'failed'), it('0126Z0', 'failed'), it('000030', 'done'), it('000040', 'pending'), it('000050', 'failed')]);
+const plan = retryPlan([it('000010', 'failed'), it('0126z0', 'failed'), it('0126Z0', 'failed'), it('000030', 'done'), it('000040', 'pending'), it('000050', 'failed')]);
 console.log(JSON.stringify({ retry: plan.retry.map((i) => i.code), excluded: plan.excluded.map((i) => i.code) }));
 """
     )
-    assert got == {"retry": ["000010", "000050"], "excluded": ["0126Z0"]}
+    assert got == {"retry": ["000010", "0126Z0", "000050"], "excluded": ["0126z0"]}
 
 
 @needs_node
