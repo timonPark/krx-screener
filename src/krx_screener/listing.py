@@ -28,7 +28,7 @@ from krx_screener.externals import Externals
 from krx_screener.flow import fetch_flow
 from krx_screener.prices import PriceStore
 from krx_screener.repository import Item
-from krx_screener.screen import lookback_days, map_with_progress, run_screen
+from krx_screener.screen import ScreenResult, lookback_days, map_with_progress, run_screen
 
 logger = logging.getLogger(__name__)
 
@@ -101,6 +101,19 @@ def _apply_sector(items: list[Item], externals: Externals, workers: int, progres
             item.description = info.description
 
 
+def universe_stats(result: ScreenResult) -> dict:
+    """1단계 결과에서 전종목 수치만 뽑는다 (종목별 내용은 넣지 않는다)."""
+    return {
+        "listing_total": result.listing_total,
+        "after_static": result.after_static,
+        "evaluated": result.evaluated,
+        "candidates": len(result.candidates),
+        "undetermined": len(result.undetermined),
+        "zero_volume_excluded": result.zero_volume_excluded,
+        "fail_each": dict(result.fail_each),
+    }
+
+
 def build_items(
     externals: Externals,
     config: Config,
@@ -111,8 +124,11 @@ def build_items(
     cache_dir: Path | None = None,
     retry_wait: float = 0.5,
     progress: Progress | None = None,
-) -> list[Item]:
-    """기준일의 목록을 순번 순서의 종목들로 돌려준다 (저장은 호출하는 쪽이 한다).
+) -> tuple[list[Item], dict]:
+    """기준일의 목록을 순번 순서의 종목들과, 그 목록을 만들며 센 전종목 수치로 돌려준다 (저장은 호출하는 쪽이 한다).
+
+    전종목 수치(``universe_stats``)는 시세를 확인한 종목 수와 조건별 불충족 수 같은 **개수**다. 이 값은 시세를 다 읽는 이 순간에만 알 수 있어서
+    세션에 같이 저장하고, 정리 때 종합 평가에 쓴다 (``summary``).
 
     ``progress(단계, 한 개수, 전체 개수)`` 는 단계(``prices`` → ``flow`` → ``sector``)가 시작될 때와 종목 하나가 끝날 때마다 불린다.
     언제나 이 함수를 부른 스레드에서 불리므로 받는 쪽이 잠금을 걸 필요가 없다.
@@ -135,4 +151,4 @@ def build_items(
     items = [_to_item(seq, row) for seq, row in enumerate(rows, start=1)]
     _apply_flow(items, externals, config, as_of, workers, retry_wait, report)
     _apply_sector(items, externals, workers, report)
-    return items
+    return items, universe_stats(result)
