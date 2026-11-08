@@ -111,5 +111,6 @@ export interface Api {
   listSessions(): Promise<Session[]>;
   getSession(id: string | null): Promise<SessionDetail>;
   process(id: string | null, offset: number, count: number): Promise<ProcessResult>;
+  processFailed(id: string | null): Promise<ProcessResult>;
   organize(id: string | null): Promise<OrganizeResult>;
 }

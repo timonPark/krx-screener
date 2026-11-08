@@ -108,6 +108,16 @@ def test_processing_updates_the_screen_and_organizing_is_gated_until_everything_
     first = facts["afterFirst"]
     assert (first["progress"], first["done"], first["failed"], first["pending"]) == ("4 / 8", "3", "1", "4")
     assert first["rows"][:4] == ["1:완료", "2:완료", "3:완료", "4:실패"] and first["rows"][4] == "5:대기"
+    # 실패한 종목은 구간 처리에서 빠지고, 버튼으로만 다시 처리한다 (#77)
+    assert facts["retry"] == {
+        "label": "실패한 종목 다시 처리 (1개)", "disabled": False,
+        "hint": "실패한 1개를 다시 보냅니다 (약 5분, 분석 쿼터 최대 1번). 서버에서는 끝났는데 연결이 끊겨 실패로 기록된 종목도 쿼터를 다시 씁니다.",
+    }
+    assert facts["failedOnlyRange"] == {
+        "startDisabled": True, "hint": "이 구간의 종목은 모두 끝났거나 실패했습니다. 다른 구간을 고르세요 (실패한 종목은 아래 버튼으로 다시 처리합니다).",
+        "eta": "0분",
+    }
+    assert facts["doneAndFailedRange"]["startDisabled"] is True
     assert facts["gated"]["disabled"] and "4개" in facts["gated"]["hint"]  # 남은 종목이 있으면 정리를 못 누른다
     assert facts["gatedApi"] == 409  # 화면 밖에서 눌러도 서버가 막는다
     assert (facts["allProcessed"]["done"], facts["allProcessed"]["failed"]) == ("7", "1")
@@ -122,6 +132,10 @@ def test_processing_updates_the_screen_and_organizing_is_gated_until_everything_
     # 정리 뒤에 종목을 다시 분석하면 순위가 낡았다고 알리고, 다시 정리하면 사라진다
     assert facts["stale"]["shown"] is True
     assert facts["restored"]["stale"] is False
+    # 확인창이 쿼터를 알리고, 취소하면 아무것도 보내지 않는다
+    confirm = "실패한 1개를 다시 처리합니다.\n약 5분이 걸리고 분석 쿼터를 최대 1번 씁니다.\n계속할까요?"
+    assert facts["cancelled"] == {"dialogs": [confirm], "failed": "1", "startedNothing": True}
+    assert facts["confirmed"] == {"dialogs": [confirm]}
     assert sorted(int(r.split(":")[1]) for r in facts["restored"]["rows"]) == list(range(1, 9))
 
 

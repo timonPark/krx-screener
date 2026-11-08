@@ -104,6 +104,11 @@ const scenarios: Record<string, Scenario> = {
     out.running = { poll: await ui.text('poll-text'), startDisabled: await ui.disabled('start-btn'), offsetDisabled: await ui.disabled('offset') };
     await ui.idle();
     out.afterFirst = { progress: await ui.text('p-processed'), done: await ui.text('p-done'), failed: await ui.text('p-failed'), pending: await ui.text('p-pending'), rows: (await ui.rows()).map((r: Row): string => `${r.seq}:${r.status}`) };
+    out.retry = { label: await ui.text('retry-btn'), disabled: await ui.disabled('retry-btn'), hint: await ui.text('retry-hint') };   // 실패한 종목 다시 처리 (#77)
+    await ui.set('offset', 3); await ui.set('count', 1);              // 실패한 4번만 든 구간: 구간 처리는 실패한 종목을 보내지 않는다
+    out.failedOnlyRange = { startDisabled: await ui.disabled('start-btn'), hint: await ui.text('start-hint'), eta: await ui.text('eta') };
+    await ui.set('offset', 0); await ui.set('count', 4);              // 3 완료 + 1 실패 구간: 보낼 것이 없다
+    out.doneAndFailedRange = { startDisabled: await ui.disabled('start-btn'), hint: await ui.text('start-hint') };
     out.gated = { disabled: await ui.disabled('organize-btn'), hint: await ui.text('organize-hint') };   // 남은 종목이 있으면 정리가 막힌다
     out.gatedApi = (await ui.api('/api/sessions/latest/organize', { method: 'POST' }))[0];
     await ui.set('offset', 4); await ui.set('count', 100);
@@ -116,9 +121,15 @@ const scenarios: Record<string, Scenario> = {
     await page.waitFor(`document.getElementById('sort').value === 'rank'`, 15000);
     out.organized = { sort: await page.eval<string>(`document.getElementById('sort').value`), stale: await ui.shown('stale-notice'), rows: (await ui.rows()).map((r: Row): string => `${r.seq}:${r.rank}`) };
     await ctl({ errors: [] });                                              // 실패했던 종목이 이번에는 성공한다
-    await ui.set('offset', 3); await ui.set('count', 1);
-    await ui.click('start-btn');
+    page.acceptDialogs = false;                                             // 확인창에서 취소하면 아무것도 보내지 않는다
+    await ui.click('retry-btn');
+    await sleep(1500);
+    out.cancelled = { dialogs: [...page.dialogs], failed: await ui.text('p-failed'), startedNothing: await ui.text('p-running') === '0' };
+    page.acceptDialogs = true;
+    page.dialogs.length = 0;
+    await ui.click('retry-btn');                                            // 확인하면 실패한 종목만 다시 보낸다
     await page.waitFor(`document.getElementById('p-failed').textContent === '0'`, 30000);
+    out.confirmed = { dialogs: [...page.dialogs] };
     await ui.idle();
     await page.waitFor(`!document.getElementById('stale-notice').hidden`, 15000);
     out.stale = { shown: await ui.shown('stale-notice'), organizeHint: await ui.text('organize-hint') };
