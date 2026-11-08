@@ -5,6 +5,8 @@ import type { CriteriaText } from './criteria.js';
 import { createNotice } from './notice.js';
 import type { Notice, NoticeSource } from './notice.js';
 import { reportHref } from './report.js';
+import { retryPlan, serverAccepts } from './retry.js';
+import type { RetryPlan } from './retry.js';
 import type { Build, BuildState, Counts, Item, ItemState, Session, SessionDetail } from './types.js';
 
 // id 로 요소를 찾는다. 없으면 어느 id 인지 알려 주며 멈춘다 (index.html 과 어긋난 것이다).
@@ -248,7 +250,10 @@ function scoreCell(it: Item): string {
 
 function statusSub(it: Item): string {
   if (it.state === 'done') return fmtDateTime(it.analyzed_at);
-  if (it.state === 'failed') return `${it.error_message || '실패'} · 다시 처리하면 재시도`;
+  if (it.state === 'failed') {
+    const why: string = it.error_message || '실패';
+    return serverAccepts(it.code) ? `${why} · 아래 '실패한 종목 다시 처리' 로 재시도` : why;   // 영숫자 코드는 다시 보내도 실패해서 재시도 안내를 붙이지 않는다
+  }
   if (it.state === 'running') return '분석 중';
   return '';
 }
@@ -309,7 +314,10 @@ function renderProcess(items: Item[], total: number): void {
   const processing: boolean = !!state.data?.processing;
   const { offset, count, valid }: Range = readRange();
   const inRange: Item[] = valid ? items.filter((it: Item): boolean => it.seq > offset && it.seq <= offset + count) : [];
-  const todo: number = inRange.filter((it: Item): boolean => it.state !== 'done').length;
+  // 구간 처리는 끝난 종목과 실패한 종목을 보내지 않는다 (실패는 아래 '실패한 종목 다시 처리' 버튼으로, #77)
+  const todo: number = inRange.filter((it: Item): boolean => it.state !== 'done' && it.state !== 'failed').length;
+  const skippedDone: number = inRange.filter((it: Item): boolean => it.state === 'done').length;
+  const skippedFailed: number = inRange.filter((it: Item): boolean => it.state === 'failed').length;
   const end: number = Math.min(total, offset + count);
 
   $('range').textContent = valid && offset < total ? `${offset + 1}–${end}` : '—';
@@ -331,13 +339,46 @@ function renderProcess(items: Item[], total: number): void {
   } else if (offset >= total) {
     hint = `오프셋이 종목 수(${total})보다 크거나 같습니다.`; disabled = true;
   } else if (todo === 0) {
-    hint = '이 구간의 종목은 모두 끝났습니다. 다른 구간을 고르세요.'; disabled = true;
+    hint = skippedFailed
+      ? '이 구간의 종목은 모두 끝났거나 실패했습니다. 다른 구간을 고르세요 (실패한 종목은 아래 버튼으로 다시 처리합니다).'
+      : '이 구간의 종목은 모두 끝났습니다. 다른 구간을 고르세요.';
+    disabled = true;
   } else {
-    hint = `이 구간에서 ${todo}개를 보냅니다 (끝난 ${inRange.length - todo}개는 건너뜀). ` + hint;
+    const skipped: string[] = [];
+    if (skippedDone) skipped.push(`끝난 ${skippedDone}개`);
+    if (skippedFailed) skipped.push(`실패한 ${skippedFailed}개`);
+    hint = `이 구간에서 ${todo}개를 보냅니다${skipped.length ? ` (${skipped.join('·')}는 건너뜀)` : ''}. ` + hint;
   }
   $<HTMLButtonElement>('start-btn').disabled = disabled;
   $('start-btn').textContent = processing ? '처리 중…' : '처리 시작';
   $('start-hint').textContent = hint;
+  renderRetry(items, processing, build);
+}
+
+// "실패한 종목 다시 처리" 버튼 (#77): 세션 전체의 실패한 종목을 한꺼번에 다시 보낸다. 영숫자 코드는 서버가 받지 않아 뺀다.
+// 서버에서는 끝났는데 연결이 끊겨 실패로 기록된 종목도 다시 보내면 분석을 한 번 더 한다 (쿼터).
+function renderRetry(items: Item[], processing: boolean, build: Build): void {
+  const { retry, excluded }: RetryPlan = retryPlan(items);
+  const n: number = retry.length;
+  const note: string = excluded.length ? ` 영숫자 코드 ${excluded.length}개는 서버가 받지 않아 뺍니다.` : '';
+  let hint: string;
+  let disabled: boolean = state.busy || !state.data || build.state !== 'ready' || processing;
+  if (build.state !== 'ready') {
+    hint = BUILD_NOT_READY[build.state] ?? '';
+  } else if (processing) {
+    hint = '이 세션을 처리하는 동안에는 누를 수 없습니다.';
+  } else if (n === 0) {
+    hint = excluded.length
+      ? `다시 보낼 실패한 종목이 없습니다. 영숫자 코드 ${excluded.length}개는 서버가 받지 않아 다시 처리해도 실패합니다.`
+      : '실패한 종목이 없습니다.';
+    disabled = true;
+  } else {
+    hint = `실패한 ${n}개를 다시 보냅니다 (약 ${fmtMinutes(n * config.minutesPerItem)}, 분석 쿼터 최대 ${n}번).`
+      + ` 서버에서는 끝났는데 연결이 끊겨 실패로 기록된 종목도 쿼터를 다시 씁니다.${note}`;
+  }
+  $<HTMLButtonElement>('retry-btn').disabled = disabled;
+  $('retry-btn').textContent = `실패한 종목 다시 처리 (${n}개)`;
+  $('retry-hint').textContent = hint;
 }
 
 function renderOrganize(c: Counts, d: SessionDetail | null): void {
@@ -400,6 +441,17 @@ $('process').addEventListener('submit', (e: Event): void => {
   const { offset, count, valid }: Range = readRange();
   if (!valid) return;
   void withBusy((): Promise<unknown> => api.process(state.sessionId, offset, count));
+});
+
+$('retry-btn').addEventListener('click', (): void => {
+  const n: number = retryPlan(state.data?.items ?? []).retry.length;
+  if (!n) return;
+  // 쿼터를 쓰는 일이라 한 번 확인한다. 취소하면 아무것도 보내지 않는다
+  const ok: boolean = window.confirm(
+    `실패한 ${n}개를 다시 처리합니다.\n약 ${fmtMinutes(n * config.minutesPerItem)}이 걸리고 분석 쿼터를 최대 ${n}번 씁니다.\n계속할까요?`,
+  );
+  if (!ok) return;
+  void withBusy((): Promise<unknown> => api.processFailed(state.sessionId));
 });
 
 $('organize-btn').addEventListener('click', (): void => {

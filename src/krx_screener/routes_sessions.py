@@ -4,7 +4,8 @@
   같은 기준일을 이미 만드는 중이면 ``409 {"detail", "session_id"}``.
 - ``GET  /api/sessions``  → 최근 순 세션 목록
 - ``GET  /api/sessions/{id}``  (``id`` 에 ``latest`` 가능) → 세션 전체 조회 (#23)
-- ``POST /api/sessions/{id}/process``  ``{"offset": 0, "count": 10}`` → 구간 처리 시작 (#17)
+- ``POST /api/sessions/{id}/process``  ``{"offset": 0, "count": 10}`` → 구간 처리 시작 (#17). 실패한 종목은 보내지 않는다 (#77)
+- ``POST /api/sessions/{id}/process-failed``  → 세션의 실패한 종목을 다시 처리 (#77)
 - ``POST /api/sessions/{id}/organize``  → 정리: 끝난 종목에 점수 순위를 매긴다 (#24)
 
 기준일은 거래일이어야 한다. 입력이 잘못되면 422, 거래일이나 전종목 목록을 받을 수 없는 외부 장애면 503 이고,
@@ -26,7 +27,7 @@ from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
-from krx_screener.analysis import RATING_LABELS, REVIEW
+from krx_screener.analysis import RATING_LABELS, REVIEW, server_accepts
 from krx_screener.asof import resolve_as_of
 from krx_screener.config import criteria_of
 from krx_screener.flow import STATUS_LABELS
@@ -265,13 +266,10 @@ class ProcessRequest(BaseModel):
     count: int = Field(ge=1)  # 거기서부터 처리할 개수
 
 
-@router.post("/{session_id}/process", response_model=None)
-def process(session_id: str, body: ProcessRequest, request: Request, background: BackgroundTasks) -> JSONResponse:
-    """목록의 ``offset`` 번째 뒤로 ``count`` 개를 처리한다 (순번이 offset+1 ~ offset+count).
+def _start_processing(session_id: str, request: Request, background: BackgroundTasks, choose) -> JSONResponse:
+    """구간 처리와 실패 재처리가 같이 쓰는 시작 절차. ``choose(items)`` 가 이번에 보낼 종목코드를 순서대로 돌려준다.
 
-    바로 ``202 {"started": true, "queued": N}`` 으로 응답하고 분석은 뒤에서 한 종목씩 돌린다. 구간 안의 종목이
-    모두 끝나 있으면 아무것도 보내지 않고 ``200 {"started": false, "queued": 0}`` 이다.
-    같은 세션이 이미 처리 중이면 ``409`` 다 (세션 단위 잠금, #18). 다른 세션은 막히지 않는다.
+    잠금(409)·서버 상태 확인(503)·응답 모양이 두 경로에서 같도록 한 곳에 둔다.
     """
     deps = request.app.state.deps
     conn = deps.connect()
@@ -283,14 +281,10 @@ def process(session_id: str, body: ProcessRequest, request: Request, background:
         unfinished = _unfinished_message(repo, session, "처리")
         if unfinished:  # 만드는 중에는 같은 잠금을 만드는 쪽이 쥐고 있어서, 잠그기 전에 거른다
             raise HTTPException(409, unfinished)
-        # 구간을 읽기 전에 잠근다: 동시에 온 두 요청이 같은 종목을 둘 다 대기열에 올리지 못하게
+        # 종목을 읽기 전에 잠근다: 동시에 온 두 요청이 같은 종목을 둘 다 대기열에 올리지 못하게
         if not repo.try_lock(session.id):
             raise HTTPException(409, "이미 처리 중입니다.")
-        items = repo.items(session.id)
-        if body.offset >= len(items):
-            raise HTTPException(422, f"오프셋이 종목 수({len(items)})보다 크거나 같습니다.")
-        window = [i for i in items if body.offset < i.seq <= body.offset + body.count]
-        todo = [i.code for i in window if i.state != "done"]  # 끝난 종목은 다시 보내지 않는다
+        todo = choose(repo.items(session.id))
         if not todo:
             return JSONResponse(status_code=200, content={"started": False, "queued": 0})
         deps.externals.analysis.check_health()  # 서버가 꺼져 있으면 아무것도 시작하지 않고 한국어 503
@@ -300,6 +294,43 @@ def process(session_id: str, body: ProcessRequest, request: Request, background:
     finally:
         if not handed_over:
             conn.close()
+
+
+@router.post("/{session_id}/process", response_model=None)
+def process(session_id: str, body: ProcessRequest, request: Request, background: BackgroundTasks) -> JSONResponse:
+    """목록의 ``offset`` 번째 뒤로 ``count`` 개를 처리한다 (순번이 offset+1 ~ offset+count).
+
+    **끝나지 않은 종목(대기, 그리고 처리하던 서버가 죽어 처리 중으로 남은 종목)만** 보낸다. 끝난 종목은 다시 보내지 않고, 실패한
+    종목도 보내지 않는다: 순번이 앞선 실패 종목이 아직 안 돌린 대기 종목보다 먼저 돌아 쿼터와 시간을 쓰는 것을 막는다 (#77).
+    실패한 종목은 ``POST /{id}/process-failed`` 로 다시 처리한다.
+
+    바로 ``202 {"started": true, "queued": N}`` 으로 응답하고 분석은 뒤에서 한 종목씩 돌린다. 구간 안에 보낼 종목이 없으면
+    아무것도 보내지 않고 ``200 {"started": false, "queued": 0}`` 이다.
+    같은 세션이 이미 처리 중이면 ``409`` 다 (세션 단위 잠금, #18). 다른 세션은 막히지 않는다.
+    """
+
+    def choose(items: list) -> list[str]:
+        if body.offset >= len(items):
+            raise HTTPException(422, f"오프셋이 종목 수({len(items)})보다 크거나 같습니다.")
+        window = [i for i in items if body.offset < i.seq <= body.offset + body.count]
+        return [i.code for i in window if i.state not in ("done", "failed")]
+
+    return _start_processing(session_id, request, background, choose)
+
+
+@router.post("/{session_id}/process-failed", response_model=None)
+def process_failed(session_id: str, request: Request, background: BackgroundTasks) -> JSONResponse:
+    """세션 전체에서 **실패한 종목을** 순번 순서대로 다시 처리한다 (#77). 구간(오프셋·개수)은 받지 않는다.
+
+    서버가 숫자 6자리 종목코드만 받아서, 다시 보내도 계속 실패하는 영숫자 코드는 뺀다 (쿼터는 쓰지 않지만 같은 사유로 즉시 실패할 뿐이다).
+    다시 보낼 종목이 없으면 ``200 {"started": false, "queued": 0}``. 응답 모양·잠금(409)·서버 확인(503)은 ``/process`` 와 같다.
+    서버에서는 끝났는데 연결이 끊겨 실패로 기록된 종목도 다시 보내면 분석을 한 번 더 한다 (쿼터를 한 번 더 쓴다).
+    """
+
+    def choose(items: list) -> list[str]:
+        return [i.code for i in items if i.state == "failed" and server_accepts(i.code)]
+
+    return _start_processing(session_id, request, background, choose)
 
 
 @router.post("/{session_id}/organize", response_model=None)

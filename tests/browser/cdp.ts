@@ -61,6 +61,9 @@ export class Page {
   private id: number;
   private readonly pending: Map<number, Pending>;
   private readonly events: CdpMessage[];
+  // 화면이 띄운 확인창(confirm)의 문구. 창은 바로 닫는다: acceptDialogs 가 true 면 확인, false 면 취소
+  readonly dialogs: string[] = [];
+  acceptDialogs: boolean = true;
 
   constructor(ws: WebSocket) {
     this.ws = ws;
@@ -82,6 +85,9 @@ export class Page {
       if (msg.id !== undefined && waiting) {
         page.pending.delete(msg.id);
         if (msg.error) waiting.bad(new Error(msg.error.message)); else waiting.ok(msg.result);
+      } else if (msg.method === 'Page.javascriptDialogOpening') {
+        page.dialogs.push(String(msg.params?.message ?? ''));
+        void page.send('Page.handleJavaScriptDialog', { accept: page.acceptDialogs });
       } else if (msg.method) page.events.push(msg);
     };
     await page.send('Page.enable');

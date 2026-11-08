@@ -58,11 +58,11 @@ GET https://stock.naver.com/api/domestic/detail/{종목코드}/detail?codeType=K
 ## 5. 기능 2 — 나눠서 처리
 
 - **입력**: 세션, 오프셋(목록 앞에서 건너뛸 개수), 개수. 개수는 고정이 아니다.
-- **동작**: 목록의 오프셋 위치부터 개수만큼, 종목을 **한 개씩 순서대로** TradingAgents-KR에 보내 분석한다. 이미 끝난 종목은 건너뛴다.
+- **동작**: 목록의 오프셋 위치부터 개수만큼, 종목을 **한 개씩 순서대로** TradingAgents-KR에 보내 분석한다. 이미 끝난 종목과 **실패한 종목은 건너뛴다** (#77). 대기 종목과, 처리하던 서버가 죽어 `처리 중` 으로 남은 종목만 보낸다.
 - **호출하면 바로 "시작했다"고 응답하고 처리는 뒤에서 한다.** 종목마다 약 5분이 걸려서 응답을 기다릴 수 없다. 진행 상황은 3번(조회)으로 본다.
 - **같은 세션을 동시에 처리하지 못한다.** 이미 처리 중이면 두 번째 호출은 바로 거절하고 "이미 처리 중"이라고 알려준다. 처리가 중간에 죽어도 잠금이 남지 않게 한다.
 - **종목 하나를 끝낼 때마다**: 분석 상태 로그에서 에이전트별 등급을 읽어 저장하고(6장), 그 종목의 점수를 계산해 저장한다. 최종 등급, 분석한 시각, 보고서 번호도 저장한다.
-- **실패**(오류, 시간 초과)는 실패로 표시한다. 다음 호출에서 다시 시도할 수 있다.
+- **실패**(오류, 시간 초과)는 실패로 표시한다. 실패한 종목은 구간 처리가 보내지 않는다 (순번이 앞선 실패 종목이 안 돌린 대기 종목보다 먼저 돌아 쿼터와 시간을 쓰던 것을 막는다, #77). 다시 돌리려면 **`POST /api/sessions/{id}/process-failed`** 를 부른다: 구간 없이 세션 전체의 실패한 종목을 순번 순서대로 보내고, 서버가 받지 않는 영숫자 코드(숫자 6자리가 아님)는 뺀다. 같은 세션 잠금(409)·서버 상태 확인(503)·응답 모양(`202/200 {"started", "queued"}`)은 구간 처리와 같다. 서버에서는 끝났는데 연결이 끊겨 실패로 기록된 종목(#75)도 다시 보내면 분석을 한 번 더 한다 (쿼터).
   - 분석 상태 조회(GET)가 한 번 끊겼다고 실패로 표시하지 않는다: 2초 간격으로 3번까지 다시 시도하고, 그래도 안 될 때만 실패로 표시한다 (#75, 13장). 사유에는 서버에서는 분석이 끝났을 수 있다는 말과 끊긴 예외의 종류가 들어간다.
 - 분석 설정은 항상 `low`로 고정이다. 저장하지 않는다.
 
@@ -176,6 +176,7 @@ GET https://stock.naver.com/api/domestic/detail/{종목코드}/detail?codeType=K
 |---|---|---|
 | 1 목록 뽑기 | `POST /api/sessions`, `GET /api/sessions` | `routes_sessions.py`, `session_build.py`, `listing.py` |
 | 2 나눠서 처리 | `POST /api/sessions/{id}/process` | `routes_sessions.py`, `processing.py`, `analysis.py` |
+| 2' 실패한 종목 다시 처리 | `POST /api/sessions/{id}/process-failed` | `routes_sessions.py` (`_start_processing` 을 구간 처리와 같이 쓴다) |
 | 6 평가점수 | (처리 안에서 계산) | `agent_ratings.py`(에이전트별 등급 읽기), `scoring.py` |
 | 3 조회 | `GET /api/sessions/{id}` (`id` 자리에 `latest` 가능) | `routes_sessions.py` |
 | 4 정리 | `POST /api/sessions/{id}/organize` | `routes_sessions.py`, `repository.py` |

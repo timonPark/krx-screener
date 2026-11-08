@@ -31,6 +31,11 @@ def post(client, session_id, **body):
     return client.post(f"/api/sessions/{session_id}/process", json=body)
 
 
+def post_failed(client, session_id):
+    """실패한 종목 다시 처리 (#77). 구간 처리는 실패한 종목을 보내지 않는다."""
+    return client.post(f"/api/sessions/{session_id}/process-failed")
+
+
 def swap_server(client, server):
     deps = client.app.state.deps
     if server.state_log_root is None:  # 서버와 같은 컴퓨터의 로그 폴더에 상태 로그를 쓴다
@@ -168,13 +173,15 @@ def test_an_unexpected_error_on_one_stock_marks_it_failed_and_the_rest_go_on(cli
     assert "처리 중 오류" in failed.error_message
 
 
-def test_a_failed_stock_is_tried_again_on_the_next_call(client, repo):
+def test_a_failed_stock_is_tried_again_by_the_retry_call_not_by_the_range(client, repo):
     session = seed(repo)
     swap_server(client, FakeAnalysisServer(errors=["000010"]))
     post(client, session.id, offset=0, count=1)
     assert states(repo, session)["000010"] == "failed"
     swap_server(client, FakeAnalysisServer())  # 이번에는 서버가 성공한다
-    assert post(client, session.id, offset=0, count=1).json() == {"started": True, "queued": 1}
+    assert post(client, session.id, offset=0, count=1).json() == {"started": False, "queued": 0}  # 구간 처리는 실패한 종목을 보내지 않는다
+    assert states(repo, session)["000010"] == "failed"
+    assert post_failed(client, session.id).json() == {"started": True, "queued": 1}
     after = repo.get_item(session.id, "000010")
     assert (after.state, after.error_message) == ("done", "")  # 재시도하면 사유가 지워진다
 
@@ -267,7 +274,7 @@ def test_a_successful_reanalysis_replaces_the_report_id(client, repo):
     repo.mark_done(session.id, "000010", decision="Buy", score=1.0, agents_rated=10, agents_total=10, report_id="000010_20261101_090000")
     repo.mark_failed(session.id, "000010", "이전 재분석 실패")
     swap_server(client, FakeAnalysisServer(report_ids={"000010": "000010_20261106_172435"}))
-    post(client, session.id, offset=0, count=1)
+    post_failed(client, session.id)
     assert repo.get_item(session.id, "000010").report_id == "000010_20261106_172435"
 
 
@@ -310,7 +317,7 @@ def test_a_successful_reanalysis_replaces_the_old_agent_ratings(client, repo):
     repo.save_agent_ratings(session.id, "000010", {"market": "Buy", "news": "Buy", "bull": "Buy"})
     repo.mark_failed(session.id, "000010", "이전 재분석 실패")
     swap_server(client, FakeAnalysisServer(agent_ratings={"000010": {"market": "Sell", "news": None}}))
-    post(client, session.id, offset=0, count=1)
+    post_failed(client, session.id)
     saved = repo.agent_ratings(session.id, "000010")
     assert saved["market"] == "Sell"  # 새 값
     assert "news" not in saved  # 새 로그에서 비었으면 옛 값을 남기지 않는다
@@ -418,7 +425,7 @@ def test_a_successful_reanalysis_replaces_the_score(client, repo):
     repo.mark_done(session.id, "000010", decision="Buy", score=2.0, agents_rated=10, agents_total=10)
     repo.mark_failed(session.id, "000010", "이전 재분석 실패")
     swap_server(client, FakeAnalysisServer(agent_ratings={"000010": {"market": "Sell"}}))
-    post(client, session.id, offset=0, count=1)
+    post_failed(client, session.id)
     assert repo.get_item(session.id, "000010").score == -2 / 10
 
 

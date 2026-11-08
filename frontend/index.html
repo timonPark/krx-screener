@@ -119,7 +119,7 @@
     <form id="process" class="card panel process">
       <div class="panel-head">
         <h2>나눠서 처리</h2>
-        <span class="muted" style="font-size:12px">분석 설정 low 고정 · 한 종목씩 순서대로 · 끝난 종목은 건너뜀</span>
+        <span class="muted" style="font-size:12px">분석 설정 low 고정 · 한 종목씩 순서대로 · 끝난·실패한 종목은 건너뜀</span>
       </div>
       <div class="process-row">
         <div class="field">
@@ -132,11 +132,15 @@
         </div>
         <div class="estimate">
           <span>대상: 순번 <b class="num" id="range">—</b></span>
-          <span>예상 약 <b class="num" id="eta">—</b> (종목당 약 5분, 끝난 종목 제외)</span>
+          <span>예상 약 <b class="num" id="eta">—</b> (종목당 약 5분, 끝난·실패한 종목 제외)</span>
         </div>
         <button id="start-btn" class="btn" type="submit">처리 시작</button>
       </div>
       <p id="start-hint"></p>
+      <div class="process-row retry-row">
+        <button id="retry-btn" class="btn" type="button">실패한 종목 다시 처리</button>
+        <p id="retry-hint"></p>
+      </div>
     </form>
 
     <div class="card panel organize">

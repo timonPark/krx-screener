@@ -2,6 +2,7 @@
 // 시세·수급은 results/2026-11-05/candidates.csv 의 실제 값, 앞 3종목 등급은 analysis.csv 의 실제 결과다.
 // 그 외 등급·점수·업종 설명은 화면 확인용 예시다.
 import { config } from './config.js';
+import { serverAccepts } from './retry.js';
 import type { ApiError } from './api.js';
 import type {
   Api, ApiErrorBody, Build, BuildStage, Counts, Criteria, Item, OrganizeResult, ProcessResult, RunningStage, Session,
@@ -145,6 +146,23 @@ function publicItem(it: MockItem): Item {
   return copy;
 }
 
+// 보낼 종목을 한 개씩 처리하는 것을 흉내 낸다 (구간 처리와 실패 재처리가 같이 쓴다)
+function runTargets(s: MockSession, targets: MockItem[]): ProcessResult {
+  if (!targets.length) return { started: false, queued: 0 };
+  s.processing = true;
+  void (async (): Promise<void> => {
+    for (const it of targets) {
+      it.state = 'running';
+      it.error_message = '';
+      await new Promise<void>((ok: () => void): void => { setTimeout(ok, config.mockMsPerItem); });
+      finish(it);
+      if (s.ranked_at) s.rank_stale = true;
+    }
+    s.processing = false;
+  })();
+  return { started: true, queued: targets.length };
+}
+
 export function createMockApi(ApiErrorCtor: ApiErrorClass): Api {
   // 맨 뒤 세션은 조건을 저장하지 않던 때의 세션이다 (criteria null → "조건 기록 없음")
   const sessions: MockSession[] = [makeSession('2026-11-05', true, CRITERIA), makeSession('2026-11-04', false, null)];
@@ -180,20 +198,18 @@ export function createMockApi(ApiErrorCtor: ApiErrorClass): Api {
       const s: MockSession = find(id);
       if (s.session.build.state !== 'ready') throw new ApiErrorCtor(409, { detail: '목록을 만드는 중입니다. 끝난 뒤에 처리할 수 있습니다.' });
       if (s.processing) throw new ApiErrorCtor(409, { detail: '이미 처리 중입니다.' });
-      const targets: MockItem[] = s.items.slice(offset, offset + count).filter((it: MockItem): boolean => it.state !== 'done');
-      if (!targets.length) return delay((): ProcessResult => ({ started: false, queued: 0 }));
-      s.processing = true;
-      void (async (): Promise<void> => {
-        for (const it of targets) {
-          it.state = 'running';
-          it.error_message = '';
-          await new Promise<void>((ok: () => void): void => { setTimeout(ok, config.mockMsPerItem); });
-          finish(it);
-          if (s.ranked_at) s.rank_stale = true;
-        }
-        s.processing = false;
-      })();
-      return delay((): ProcessResult => ({ started: true, queued: targets.length }));
+      // 백엔드처럼 끝난 종목과 실패한 종목은 보내지 않는다 (실패는 processFailed 로 다시 처리한다, #77)
+      const targets: MockItem[] = s.items.slice(offset, offset + count).filter((it: MockItem): boolean => it.state !== 'done' && it.state !== 'failed');
+      const result: ProcessResult = runTargets(s, targets);   // 처리 중 표시는 바로 켠다 (지연은 응답에만)
+      return delay((): ProcessResult => result);
+    },
+    async processFailed(id: string | null): Promise<ProcessResult> {
+      const s: MockSession = find(id);
+      if (s.session.build.state !== 'ready') throw new ApiErrorCtor(409, { detail: '목록을 만드는 중입니다. 끝난 뒤에 처리할 수 있습니다.' });
+      if (s.processing) throw new ApiErrorCtor(409, { detail: '이미 처리 중입니다.' });
+      const targets: MockItem[] = s.items.filter((it: MockItem): boolean => it.state === 'failed' && serverAccepts(it.code));
+      const result: ProcessResult = runTargets(s, targets);
+      return delay((): ProcessResult => result);
     },
     async organize(id: string | null): Promise<OrganizeResult> {
       const s: MockSession = find(id);

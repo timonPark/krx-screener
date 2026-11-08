@@ -8,7 +8,7 @@ from datetime import date
 
 from fakes import FakeAnalysisServer
 from test_organize_api import finish, finish_all, organize, ranks
-from test_process_api import post, seed, swap_server
+from test_process_api import post_failed, seed, swap_server
 
 
 def stale(client, session):
@@ -42,7 +42,7 @@ def test_reanalyzing_after_the_ranking_makes_it_stale_and_organizing_again_makes
     organize(client, session.id)
     assert stale(client, session) is False
     swap_server(client, FakeAnalysisServer(agent_ratings={"000030": {"market": "Buy"}}))
-    assert post(client, session.id, offset=2, count=1).json() == {"started": True, "queued": 1}  # 실패한 종목을 다시 처리
+    assert post_failed(client, session.id).json() == {"started": True, "queued": 1}  # 실패한 종목을 다시 처리
     assert stale(client, session) is True  # 정리 뒤에 다시 분석됐다
     assert organize(client, session.id).json() == {"ranked": 5, "unscored": 0}
     assert stale(client, session) is False  # 다시 정리하면 최신
@@ -79,7 +79,7 @@ def test_a_failed_stock_that_fails_again_does_not_make_it_stale(client, repo):
     repo.mark_failed(session.id, "000030", "첫 분석 실패")
     organize(client, session.id)
     swap_server(client, FakeAnalysisServer(errors=["000030"]))
-    post(client, session.id, offset=2, count=1)  # 다시 처리했지만 또 실패
+    post_failed(client, session.id)  # 다시 처리했지만 또 실패
     assert repo.get_item(session.id, "000030").state == "failed"
     assert stale(client, session) is False  # 실패는 전에도 비교에서 빠져 있었다. 다시 정리해도 같다
     before = ranks(repo, session)
@@ -137,6 +137,6 @@ def test_a_session_with_only_failed_stocks_goes_stale_when_one_succeeds_later(cl
         repo.mark_failed(session.id, code, "실패")
     organize(client, session.id)  # 순위가 빈 정리
     assert stale(client, session) is False
-    swap_server(client, FakeAnalysisServer())
-    post(client, session.id, offset=0, count=1)  # 하나가 성공 → 순위에 들어가야 한다
+    swap_server(client, FakeAnalysisServer(errors=["000020", "000030", "000040", "000050"]))
+    post_failed(client, session.id)  # 하나(000010)만 성공 → 순위에 들어가야 한다
     assert stale(client, session) is True

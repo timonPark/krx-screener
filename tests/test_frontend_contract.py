@@ -148,11 +148,11 @@ def test_a_stock_the_mock_finishes_gets_a_report_id_too():
     detail = run_js(
         MOCK
         + """
-await api.process('latest', 3, 2);   // 실패한 종목(순번 4)과 대기 종목(순번 5)
-for (let i = 0; i < 200; i++) {
-  const d = await api.getSession('latest');
-  if (!d.processing) break;
-}
+const wait = async () => { for (let i = 0; i < 400; i++) { if (!(await api.getSession('latest')).processing) break; await new Promise((r) => setTimeout(r, 20)); } };
+await api.process('latest', 3, 2);   // 구간 처리는 실패한 종목(순번 4)을 보내지 않고 대기 종목(순번 5)만 보낸다
+await wait();
+await api.processFailed('latest');   // 실패한 종목(순번 4)은 이 호출로 다시 처리한다
+await wait();
 console.log(JSON.stringify(await api.getSession('latest')));
 """
     )
@@ -442,3 +442,56 @@ process.exit(0);
     assert seeded["criteria"]["filters"]["min_avg_trading_value_krw"] == 1_000_000_000 and legacy["criteria"] is None
     assert got["created"]["criteria"]["filters"]["min_avg_trading_value_krw"] == 2_000_000_000  # 설정을 바꾼 뒤에 뽑은 목록
     assert got["created"]["criteria"] != seeded["criteria"]
+
+
+# --- 실패한 종목 다시 처리 (#77) ---
+
+
+@needs_node
+def test_the_screens_rule_for_codes_the_server_accepts_matches_the_backends():
+    from krx_screener.analysis import server_accepts
+
+    codes = ["005930", "0126Z0", "00680K", "12345", "1234567", "00593 ", "", "abcdef", "000010"]
+    got = run_js(
+        f"""
+const {{ serverAccepts }} = await import(dir + '/retry.js');
+console.log(JSON.stringify({json.dumps(codes)}.map((c) => serverAccepts(c))));
+"""
+    )
+    assert got == [server_accepts(c) for c in codes]  # 숫자 6자리만. 영숫자 코드·우선주는 다시 보내도 서버가 거절한다
+
+
+@needs_node
+def test_the_retry_plan_leaves_out_failed_codes_the_server_would_refuse():
+    got = run_js(
+        """
+const { retryPlan } = await import(dir + '/retry.js');
+const it = (code, state) => ({ code, state });
+const plan = retryPlan([it('000010', 'failed'), it('0126Z0', 'failed'), it('000030', 'done'), it('000040', 'pending'), it('000050', 'failed')]);
+console.log(JSON.stringify({ retry: plan.retry.map((i) => i.code), excluded: plan.excluded.map((i) => i.code) }));
+"""
+    )
+    assert got == {"retry": ["000010", "000050"], "excluded": ["0126Z0"]}
+
+
+@needs_node
+def test_the_mock_retry_answers_like_the_backends():
+    got = run_js(
+        MOCK
+        + """
+config.mockMsPerItem = 400;   // 응답(0.15초)이 올 때 아직 처리 중이도록
+const wait = async () => { for (let i = 0; i < 400; i++) { if (!(await api.getSession('latest')).processing) break; await new Promise((r) => setTimeout(r, 20)); } };
+const out = {};
+out.first = await api.processFailed('latest');            // 예시 데이터에는 실패한 종목(순번 4)이 하나 있다
+try { await api.processFailed('latest'); out.busy = null; } catch (e) { out.busy = { status: e.status, body: e.body }; }   // 처리 중에 다시 부르면 409
+await wait();
+out.after = (await api.getSession('latest')).items[3].state;
+out.nothing = await api.processFailed('latest');          // 더 다시 보낼 종목이 없다
+console.log(JSON.stringify(out));
+process.exit(0);
+"""
+    )
+    assert got["first"] == {"started": True, "queued": 1}  # 백엔드: 202 {"started": true, "queued": N}
+    assert got["busy"] == {"status": 409, "body": {"detail": "이미 처리 중입니다."}}
+    assert got["after"] == "done"
+    assert got["nothing"] == {"started": False, "queued": 0}  # 백엔드: 200 {"started": false, "queued": 0}
