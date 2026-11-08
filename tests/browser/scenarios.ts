@@ -134,6 +134,17 @@ const scenarios: Record<string, Scenario> = {
       // 링크가 가리키는 보고서가 실제로 내려온다 (마크다운 첨부 파일)
       report: await page.eval<[number, string | null, string | null, string]>(`fetch('${reportHref}').then(async (r) => [r.status, r.headers.get('content-type'), r.headers.get('content-disposition'), (await r.text()).split('\\n')[0]])`),
     };
+    // 차트: 서버가 그린 SVG 를 <img> 로 보여 준다. 그림이 실제로 받아져 그려졌는가
+    await page.waitFor(`[...document.querySelectorAll('#charts-market img, #charts-themes img')].every((i) => i.complete)`, 15000);
+    out.charts = await page.eval<Array<{ alt: string; loaded: boolean; src: string }>>(`[...document.querySelectorAll('#charts-market img, #charts-themes img')].map((i) => ({ alt: i.alt, loaded: i.naturalWidth > 0, src: i.getAttribute('src') }))`);
+    // HTML 보고서 링크: 차트(SVG)가 문서 안에 들어 있다
+    const htmlHref: string = await page.eval<string>(`document.getElementById('report-html-link').getAttribute('href')`);
+    out.htmlReport = await page.eval<[number, string | null, string, number]>(`fetch('${htmlHref}').then(async (r) => { const t = await r.text(); return [r.status, r.headers.get('content-type'), t.slice(0, 15), (t.match(/<svg/g) || []).length]; })`);
+    // 조회가 다시 돌아도(탭이 다시 보일 때) 같은 정리면 그림을 다시 만들지 않는다 (깜빡임·재요청 방지)
+    await page.eval(`window.__firstChart = document.querySelector('#charts-market img')`);
+    await page.eval(`document.dispatchEvent(new Event('visibilitychange'))`);
+    await sleep(1200);
+    out.chartsKept = await page.eval<boolean>(`window.__firstChart === document.querySelector('#charts-market img')`);
     await ctl({ errors: [] });                                              // 실패했던 종목이 이번에는 성공한다
     page.acceptDialogs = false;                                             // 확인창에서 취소하면 아무것도 보내지 않는다
     await ui.click('retry-btn');

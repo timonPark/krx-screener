@@ -140,6 +140,13 @@ def test_processing_updates_the_screen_and_organizing_is_gated_until_everything_
     assert status == 200 and content_type.startswith("text/markdown")
     assert disposition == 'attachment; filename="krx-screener-summary-2026-11-05.md"'
     assert first_line == "# KRX Screener 정리 요약 — 2026-11-05"
+    # 차트: 서버가 그린 SVG 가 <img> 로 실제 그려진다 (전종목 수치가 있어 다섯 개)
+    assert [c["alt"] for c in facts["charts"]] == ["등급 분포", "수급 상태 분포", "전종목 시장 폭", "업종별 평균 평가점수", "업종별 등급 구성"]
+    assert all(c["loaded"] for c in facts["charts"])  # 받아서 그려진 그림이다 (깨진 이미지가 아니다)
+    assert all("/charts/" in c["src"] and ".svg?v=" in c["src"] for c in facts["charts"])  # 정리 시각이 주소에 붙는다
+    assert facts["chartsKept"] is True  # 같은 정리면 조회가 돌아도 그림을 다시 만들지 않는다
+    status, content_type, start, svgs = facts["htmlReport"]  # HTML 보고서에도 같은 차트가 들어 있다
+    assert status == 200 and content_type.startswith("text/html") and start == "<!doctype html>" and svgs == 5
     # 정리 뒤에 종목을 다시 분석하면 순위가 낡았다고 알리고, 다시 정리하면 사라진다
     assert facts["stale"]["shown"] is True
     assert facts["restored"]["stale"] is False

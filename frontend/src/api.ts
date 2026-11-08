@@ -1,7 +1,7 @@
 // 백엔드 API 호출. 경로와 응답 모양은 frontend/README.md 의 "API 계약" 을 따른다.
 import { config } from './config.js';
 import { createMockApi } from './mock.js';
-import type { Api, ApiErrorBody, OrganizeResult, ProcessResult, Session, SessionDetail } from './types.js';
+import type { Api, ApiErrorBody, ChartName, OrganizeResult, ProcessResult, ReportFormat, Session, SessionDetail } from './types.js';
 
 export class ApiError extends Error {
   readonly status: number;
@@ -49,8 +49,12 @@ const httpApi: Api = {
     request<ProcessResult>('POST', `/api/sessions/${sid(id)}/process-failed`),
   // 4. 정리 (409: 남은 종목 있음, body.remaining)
   organize: (id: string | null): Promise<OrganizeResult> => request<OrganizeResult>('POST', `/api/sessions/${sid(id)}/organize`),
-  // 4'. 정리 요약 보고서(마크다운 첨부 파일). 정리하기 전에는 409
-  reportHref: (id: string | null): string => `${config.apiBase}/api/sessions/${sid(id)}/report`,
+  // 4'. 정리 요약 보고서(첨부 파일). 마크다운이 기본이고 HTML 은 ?format=html. 정리하기 전에는 409
+  reportHref: (id: string | null, format: ReportFormat): string =>
+    `${config.apiBase}/api/sessions/${sid(id)}/report${format === 'html' ? '?format=html' : ''}`,
+  // 4''. 정리 요약 차트(SVG). 다시 정리하면 그림이 바뀌므로 정리 시각을 주소에 붙인다
+  chartHref: (id: string | null, name: ChartName, version: string): string =>
+    `${config.apiBase}/api/sessions/${sid(id)}/charts/${name}.svg?v=${encodeURIComponent(version)}`,
 };
 
 export const api: Api = config.mock ? createMockApi(ApiError) : httpApi;
