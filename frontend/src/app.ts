@@ -70,10 +70,12 @@ function fmtDateTime(iso: string | null | undefined): string {
   return `${p.month}-${p.day} ${p.hour}:${p.minute}`;
 }
 const sessionLabel = (s: Session): string => `${s.as_of}-${String(s.id).replace(/-/g, '').slice(0, 8)}`;
+// 점수는 저장값(−2 ~ +2)에 100 을 곱한 정수로 보인다 (#76). 저장값·정렬·순위는 그대로다.
 function fmtScore(s: number | null | undefined): string {
   if (s == null) return '';
-  const sign: string = s > 0 ? '+' : s < 0 ? '−' : '';
-  return sign + Math.abs(s).toFixed(2);
+  const n: number = Math.round(Math.abs(s) * 100);   // 부호를 떼고 반올림해서 −0.005 → 0 처럼 −0 이 되지 않게 한다
+  const sign: string = n === 0 ? '' : s > 0 ? '+' : '−';
+  return sign + String(n);
 }
 function fmtMinutes(m: number): string {
   if (m < 60) return `${m}분`;

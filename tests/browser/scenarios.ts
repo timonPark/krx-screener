@@ -111,6 +111,7 @@ const scenarios: Record<string, Scenario> = {
     await page.waitFor(`document.getElementById('p-pending').textContent === '0'`, 60000);
     await ui.idle();
     out.allProcessed = { done: await ui.text('p-done'), failed: await ui.text('p-failed'), organizeDisabled: await ui.disabled('organize-btn') };
+    out.scores = (await ui.rows()).map((r: Row): string => `${r.seq}:${r.score.split('에이전트')[0].trim()}`);   // 화면에 보이는 점수 글 (에이전트 수는 뺀다)
     await ui.click('organize-btn');
     await page.waitFor(`document.getElementById('sort').value === 'rank'`, 15000);
     out.organized = { sort: await page.eval<string>(`document.getElementById('sort').value`), stale: await ui.shown('stale-notice'), rows: (await ui.rows()).map((r: Row): string => `${r.seq}:${r.rank}`) };
