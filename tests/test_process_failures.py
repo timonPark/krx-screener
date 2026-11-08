@@ -6,7 +6,7 @@
 from dataclasses import replace
 
 from fakes import FakeAnalysisServer
-from test_process_api import post, seed, states, swap_server
+from test_process_api import post, post_failed, seed, states, swap_server
 
 from krx_screener.analysis import AnalysisError
 
@@ -95,17 +95,17 @@ def test_a_timed_out_stock_is_retried_and_the_reason_is_cleared(client, repo):
     post(client, session.id, offset=0, count=1)
     assert states(repo, session)["000010"] == "failed"
     swap_server(client, FakeAnalysisServer(decisions={"000010": "Buy"}))
-    assert post(client, session.id, offset=0, count=1).json() == {"started": True, "queued": 1}
+    assert post_failed(client, session.id).json() == {"started": True, "queued": 1}
     item = repo.get_item(session.id, "000010")
     assert (item.state, item.decision, item.error_message) == ("done", "Buy", "")
 
 
-def test_only_the_failed_stocks_are_sent_again_when_the_range_is_called_again(client, repo, externals):
+def test_only_the_failed_stocks_are_sent_again_by_the_retry_call(client, repo, externals):
     session = seed(repo)
     swap_server(client, FakeAnalysisServer(errors=["000020"]))
     post(client, session.id, offset=0, count=3)
     server = swap_server(client, FakeAnalysisServer())
-    assert post(client, session.id, offset=0, count=3).json() == {"started": True, "queued": 1}
+    assert post_failed(client, session.id).json() == {"started": True, "queued": 1}
     assert [s[0] for s in server.started] == ["000020"]  # 끝난 종목은 다시 보내지 않는다
 
 
@@ -123,7 +123,7 @@ def test_a_failed_reanalysis_keeps_the_grade_that_was_already_there(client, repo
     session = seed(repo)
     graded_then_failed(repo, session)
     swap_server(client, FakeAnalysisServer(errors=["000010"]))
-    post(client, session.id, offset=0, count=1)
+    post_failed(client, session.id)
     item = repo.get_item(session.id, "000010")
     assert item.state == "failed"
     assert item.error_message == "가짜 서버 오류"  # 사유는 새 사유로 바뀐다
@@ -137,7 +137,7 @@ def test_a_timed_out_reanalysis_keeps_the_grade_too(client, repo):
     graded_then_failed(repo, session)
     swap_server(client, FakeAnalysisServer(polls_before_done=10_000))
     use_timeout(client, 0)
-    post(client, session.id, offset=0, count=1)
+    post_failed(client, session.id)
     item = repo.get_item(session.id, "000010")
     assert (item.state, item.decision, item.score) == ("failed", "Buy", 1.5)
 
@@ -153,7 +153,7 @@ def test_the_old_grade_stays_visible_while_the_reanalysis_is_running(client, rep
     session = seed(repo)
     graded_then_failed(repo, session)
     swap_server(client, Watching())
-    post(client, session.id, offset=0, count=1)
+    post_failed(client, session.id)
     assert (seen[0].state, seen[0].decision, seen[0].score) == ("running", "Buy", 1.5)
 
 
@@ -161,6 +161,6 @@ def test_a_successful_reanalysis_replaces_the_old_grade(client, repo):
     session = seed(repo)
     graded_then_failed(repo, session)
     swap_server(client, FakeAnalysisServer(decisions={"000010": "Sell"}))
-    post(client, session.id, offset=0, count=1)
+    post_failed(client, session.id)
     item = repo.get_item(session.id, "000010")
     assert (item.state, item.decision, item.error_message) == ("done", "Sell", "")

@@ -10,7 +10,7 @@ import pytest
 import requests
 from fakes import FakeAnalysisServer
 from test_analysis import FakeClient, FakeSession, _Resp, _run  # 같은 가짜들을 쓴다
-from test_process_api import post, seed, states, swap_server
+from test_process_api import post, post_failed, seed, states, swap_server
 from test_process_failures import use_timeout
 
 from krx_screener.analysis import DONE, AnalysisClient
@@ -121,7 +121,7 @@ def test_retrying_a_timed_out_stock_while_the_server_still_runs_it_sends_nothing
     assert len(server.started) == 1  # 처음 한 번만 보냈다
 
     use_timeout(client, 100)  # 이번에는 끝까지 기다린다
-    assert post(client, session.id, offset=0, count=1).json() == {"started": True, "queued": 1}
+    assert post_failed(client, session.id).json() == {"started": True, "queued": 1}
     item = repo.get_item(session.id, "000010")
     assert (item.state, item.decision, item.error_message) == ("done", "Hold", "")
     assert len(server.started) == 1  # 서버에서 도는 분석을 이어서 기다렸다 → 새 분석(쿼터)을 더 쓰지 않았다
@@ -135,6 +135,6 @@ def test_the_same_stock_is_sent_again_once_the_earlier_analysis_has_finished(cli
     post(client, session.id, offset=0, count=1)
     assert states(repo, session)["000010"] == "failed"
     server.errors.clear()
-    post(client, session.id, offset=0, count=1)
+    post_failed(client, session.id)
     assert states(repo, session)["000010"] == "done"
     assert len(server.started) == 2  # 끝난 분석은 이어받지 않고 새로 보낸다 (재시도)
