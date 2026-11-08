@@ -275,5 +275,6 @@ export function createMockApi(ApiErrorCtor: ApiErrorClass): Api {
       return delay((): OrganizeResult => ({ ranked: c.done, unscored: 0 }));
     },
     reportHref(): null { return null; },   // 예시 모드는 서버가 없어 내려받을 파일이 없다
+    chartHref(): null { return null; },     // 차트도 서버가 그려 주므로 예시 모드에는 없다
   };
 }

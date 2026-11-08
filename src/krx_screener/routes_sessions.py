@@ -7,7 +7,8 @@
 - ``POST /api/sessions/{id}/process``  ``{"offset": 0, "count": 10}`` → 구간 처리 시작 (#17). 실패한 종목은 보내지 않는다 (#77)
 - ``POST /api/sessions/{id}/process-failed``  → 세션의 실패한 종목을 다시 처리 (#77)
 - ``POST /api/sessions/{id}/organize``  → 정리: 끝난 종목에 점수 순위를 매기고 업종별 해석·종합 평가를 저장한다 (#24)
-- ``GET  /api/sessions/{id}/report``  → 정리 요약 마크다운 보고서 (첨부 파일). 정리한 적이 없으면 409
+- ``GET  /api/sessions/{id}/report``  → 정리 요약 보고서 (첨부 파일, ``?format=md|html``). 정리한 적이 없으면 409
+- ``GET  /api/sessions/{id}/charts/{이름}.svg``  → 정리 요약의 차트 (SVG). 화면과 HTML 보고서가 같은 그림을 쓴다
 
 기준일은 거래일이어야 한다. 입력이 잘못되면 422, 거래일이나 전종목 목록을 받을 수 없는 외부 장애면 503 이고,
 둘 다 ``{"detail": "한국어 메시지"}`` 다.
@@ -22,12 +23,14 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, date, datetime
+from typing import Literal
 
 import psycopg
-from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, Field
 
+from krx_screener import summary_charts
 from krx_screener.analysis import RATING_LABELS, REVIEW, server_accepts
 from krx_screener.asof import resolve_as_of
 from krx_screener.config import criteria_of
@@ -36,7 +39,7 @@ from krx_screener.processing import process_codes
 from krx_screener.repository import Item, NotFoundError, Session, SessionRepository, StoredSummary
 from krx_screener.session_build import build_session
 from krx_screener.summary import FLOW_ORDER, RATING_ORDER
-from krx_screener.summary_report import render_markdown
+from krx_screener.summary_report import render_html, render_markdown
 
 router = APIRouter(prefix="/api/sessions")
 
@@ -334,24 +337,51 @@ def get_session(session_id: str, request: Request) -> SessionDetailOut:
     )
 
 
-@router.get("/{session_id}/report", response_model=None)
-def get_report(session_id: str, request: Request) -> Response:
-    """정리 요약을 마크다운 보고서로 내려받는다 (``latest`` 가능). 정리한 적이 없으면 ``409``.
+NOT_ORGANIZED = "정리를 먼저 실행하세요. 정리해야 요약 보고서와 차트가 만들어집니다."
 
-    정리할 때 저장한 문장을 그대로 싣는다 (``summary_report``). 응답은 ``text/markdown`` 첨부 파일이고 이름은 ``krx-screener-summary-<기준일>.md`` 다.
+
+@router.get("/{session_id}/report", response_model=None)
+def get_report(session_id: str, request: Request, report_format: Literal["md", "html"] = Query("md", alias="format")) -> Response:
+    """정리 요약을 보고서 파일로 내려받는다 (``latest`` 가능). ``format`` 은 ``md``(기본, 마크다운) 또는 ``html``. 정리한 적이 없으면 ``409``.
+
+    정리할 때 저장한 문장을 그대로 싣는다 (``summary_report``). 마크다운은 텍스트 막대그래프, HTML 은 SVG 차트가 들어 있다.
+    응답은 첨부 파일이고 이름은 ``krx-screener-summary-<기준일>.md`` / ``.html`` 이다.
     """
     with request.app.state.deps.connect() as conn:
         repo = SessionRepository(conn)
         session = _find_session(repo, session_id)
         stored = repo.stored_summary(session.id)
         if stored is None:
-            return JSONResponse(status_code=409, content={"detail": "정리를 먼저 실행하세요. 정리해야 요약 보고서가 만들어집니다."})
-        body = render_markdown(session.as_of, repo.counts(session.id), repo.rank_is_stale(session.id), stored)
+            return JSONResponse(status_code=409, content={"detail": NOT_ORGANIZED})
+        render, media_type = (render_html, "text/html") if report_format == "html" else (render_markdown, "text/markdown")
+        body = render(session.as_of, repo.counts(session.id), repo.rank_is_stale(session.id), stored)
     return Response(
         content=body,
-        media_type="text/markdown; charset=utf-8",
-        headers={"Content-Disposition": f'attachment; filename="krx-screener-summary-{session.as_of.isoformat()}.md"'},
+        media_type=f"{media_type}; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="krx-screener-summary-{session.as_of.isoformat()}.{report_format}"'},
     )
+
+
+@router.get("/{session_id}/charts/{name}.svg", response_model=None)
+def get_chart(session_id: str, name: str, request: Request) -> Response:
+    """정리 요약의 차트 하나를 SVG 로 내려준다 (``latest`` 가능). 화면의 ``<img>`` 와 HTML 보고서가 같은 그림을 쓴다 (``summary_charts``).
+
+    차트 이름은 ``rating``(등급 분포), ``flow``(수급 상태), ``breadth``(전종목 시장 폭), ``theme-score``(업종별 평균 평가점수), ``theme-ratings``(업종별 등급 구성).
+    정리한 적이 없으면 ``409``, 모르는 이름이면 ``404``, 전종목 수치를 저장하지 않은 목록의 ``breadth`` 는 ``404``다.
+    다시 정리하면 그림이 바뀌어서 캐시하지 않는다 (``Cache-Control: no-cache``).
+    """
+    with request.app.state.deps.connect() as conn:
+        repo = SessionRepository(conn)
+        session = _find_session(repo, session_id)
+        if name not in summary_charts.CHART_NAMES:
+            return JSONResponse(status_code=404, content={"detail": f"그런 차트가 없습니다: {name}"})
+        stored = repo.stored_summary(session.id)
+    if stored is None:
+        return JSONResponse(status_code=409, content={"detail": NOT_ORGANIZED})
+    svg = summary_charts.render(name, stored)
+    if svg is None:
+        return JSONResponse(status_code=404, content={"detail": "이 목록은 전종목 수치가 저장되어 있지 않아 그릴 수 없습니다."})
+    return Response(content=svg, media_type="image/svg+xml; charset=utf-8", headers={"Cache-Control": "no-cache"})
 
 
 class ProcessRequest(BaseModel):

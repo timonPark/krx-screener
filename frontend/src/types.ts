@@ -138,6 +138,10 @@ export interface ApiErrorBody {
   session_id?: string | null; // 새 목록: 이미 만드는 중인 세션
 }
 
+// 보고서 형식과 차트 이름 (백엔드의 ?format=, /charts/{이름}.svg 와 같다)
+export type ReportFormat = 'md' | 'html';
+export type ChartName = 'rating' | 'flow' | 'breadth' | 'theme-score' | 'theme-ratings';
+
 // 화면이 부르는 API. 진짜(api.ts 의 httpApi)와 예시(mock.ts)가 같은 모양이다.
 export interface Api {
   createSession(asOf: string): Promise<Session>;
@@ -146,6 +150,8 @@ export interface Api {
   process(id: string | null, offset: number, count: number): Promise<ProcessResult>;
   processFailed(id: string | null): Promise<ProcessResult>;
   organize(id: string | null): Promise<OrganizeResult>;
-  // 정리 요약 보고서(마크다운)를 내려받는 주소. 예시 모드는 서버가 없어 null
-  reportHref(id: string | null): string | null;
+  // 정리 요약 보고서(마크다운 또는 HTML)를 내려받는 주소. 예시 모드는 서버가 없어 null
+  reportHref(id: string | null, format: ReportFormat): string | null;
+  // 정리 요약 차트(SVG) 주소. version 은 정리 시각이고 주소에 붙여 다시 정리하면 새 그림을 받게 한다. 예시 모드는 null
+  chartHref(id: string | null, name: ChartName, version: string): string | null;
 }

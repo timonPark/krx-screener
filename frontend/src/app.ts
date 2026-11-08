@@ -7,7 +7,7 @@ import type { Notice, NoticeSource } from './notice.js';
 import { reportHref } from './report.js';
 import { retryPlan, serverAccepts } from './retry.js';
 import type { RetryPlan } from './retry.js';
-import type { Build, BuildState, Counts, Item, ItemState, Session, SessionDetail, Summary, ThemeSummary } from './types.js';
+import type { Build, BuildState, ChartName, Counts, Item, ItemState, Session, SessionDetail, Summary, ThemeSummary } from './types.js';
 
 // id 로 요소를 찾는다. 없으면 어느 id 인지 알려 주며 멈춘다 (index.html 과 어긋난 것이다).
 function $<T extends HTMLElement = HTMLElement>(id: string): T {
@@ -450,16 +450,45 @@ function themeRow(t: ThemeSummary): string {
     </tr>`;
 }
 
+// 차트는 서버가 그린 SVG 다 (화면과 HTML 보고서가 같은 그림을 쓴다). 그림을 새로 받는 것은 정리했을 때뿐이라, 같은 정리면 다시 그리지 않는다
+// (조회가 10초마다 도는데 그때마다 <img> 를 바꾸면 그림이 깜빡이고 다시 받는다).
+const MARKET_CHARTS: Array<[ChartName, string]> = [['rating', '등급 분포'], ['flow', '수급 상태 분포'], ['breadth', '전종목 시장 폭']];
+const THEME_CHARTS: Array<[ChartName, string]> = [['theme-score', '업종별 평균 평가점수'], ['theme-ratings', '업종별 등급 구성']];
+
+function chartsHtml(list: Array<[ChartName, string]>, d: SessionDetail, s: Summary): string {
+  const hasUniverse: boolean = asNumber(s.market.universe_stats?.evaluated) != null;   // 전종목 수치를 저장하지 않은 목록은 시장 폭을 그리지 않는다
+  const figures: string[] = list
+    .filter(([name]: [ChartName, string]): boolean => name !== 'breadth' || hasUniverse)
+    .flatMap(([name, label]: [ChartName, string]): string[] => {
+      const href: string | null = api.chartHref(d.session.id, name, s.created_at);
+      return href ? [`<figure class="chart"><a href="${esc(href)}" target="_blank" rel="noopener"><img src="${esc(href)}" alt="${esc(label)}" loading="lazy"></a></figure>`] : [];
+    });
+  return figures.join('');
+}
+
+function setCharts(id: string, key: string, html: string): void {
+  const el: HTMLElement = $(id);
+  if (el.dataset.key === key) return;
+  el.dataset.key = key;
+  el.innerHTML = html;
+}
+
 function renderSummary(d: SessionDetail | null): void {
   const s: Summary | null = d?.summary ?? null;
   $('summary-card').hidden = !s;
   if (!d || !s) return;
   $('summary-meta').textContent = `정리 ${fmtDateTime(s.created_at)}${d.rank_stale ? ' · 낡음 (정리 이후 다시 분석된 종목이 있습니다)' : ''}`;
-  const href: string | null = api.reportHref(d.session.id);
-  const link: HTMLAnchorElement = $<HTMLAnchorElement>('report-link');
-  link.hidden = !href;
-  link.href = href ?? '#';
-  $('report-note').hidden = !!href;
+  const mdHref: string | null = api.reportHref(d.session.id, 'md');
+  const htmlHref: string | null = api.reportHref(d.session.id, 'html');
+  const mdLink: HTMLAnchorElement = $<HTMLAnchorElement>('report-link');
+  const htmlLink: HTMLAnchorElement = $<HTMLAnchorElement>('report-html-link');
+  mdLink.hidden = !mdHref; mdLink.href = mdHref ?? '#';
+  htmlLink.hidden = !htmlHref; htmlLink.href = htmlHref ?? '#';
+  $('report-note').hidden = !!mdHref;
+  const key: string = `${d.session.id}|${s.created_at}`;
+  const market: string = chartsHtml(MARKET_CHARTS, d, s);
+  setCharts('charts-market', key, market || '<p class="faint">예시 모드에서는 서버가 차트를 그리지 못해 볼 수 없습니다.</p>');
+  setCharts('charts-themes', key, s.themes.length ? chartsHtml(THEME_CHARTS, d, s) : '');
   $('market-text').textContent = s.market.assessment;
   $('market-stats').innerHTML = marketStats(s).map(([name, value]: [string, string]): string => `<div><dt>${esc(name)}</dt><dd>${esc(value)}</dd></div>`).join('');
   $('theme-rows').innerHTML = s.themes.map(themeRow).join('');

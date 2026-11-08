@@ -195,3 +195,8 @@ tr.is-running { background: #F7F5FE; }
 .stats dd { margin: 0; word-break: keep-all; }   /* 한글은 글자 중간에서 줄을 바꾸지 않는다 (예: 매도) */
 .theme-table { min-width: 960px; }
 .theme-table .interp { min-width: 360px; max-width: 520px; font-size: 12px; color: var(--text-2); line-height: 1.6; white-space: normal; }
+.links { display: inline-flex; flex-wrap: wrap; gap: 8px; }
+.charts { display: grid; grid-template-columns: repeat(auto-fit, minmax(420px, 1fr)); gap: 16px; }
+.chart { margin: 0; padding: 12px; border: 1px solid var(--border-soft); border-radius: var(--radius); background: var(--surface); }
+.chart a { display: block; }
+.chart img { display: block; width: 100%; height: auto; }   /* SVG 의 viewBox 로 크기를 맞춘다 */

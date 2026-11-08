@@ -301,11 +301,12 @@ const before = (await api.getSession('latest')).summary;
 await api.process('latest', 4, 100);
 for (let i = 0; i < 400; i++) { if (!(await api.getSession('latest')).processing) break; await new Promise((r) => setTimeout(r, 20)); }
 await api.organize('latest');
-console.log(JSON.stringify({ before, after: (await api.getSession('latest')).summary, href: api.reportHref('latest') }));
+console.log(JSON.stringify({ before, after: (await api.getSession('latest')).summary, href: api.reportHref('latest', 'md'), htmlHref: api.reportHref('latest', 'html'), chart: api.chartHref('latest', 'rating', 'v1') }));
 """
     )
     assert got["before"] is None  # 정리하기 전에는 요약이 없다 (백엔드: null)
-    assert got["href"] is None  # 예시 모드는 서버가 없어 내려받을 파일이 없다
+    assert got["href"] is None and got["htmlHref"] is None  # 예시 모드는 서버가 없어 내려받을 파일이 없다
+    assert got["chart"] is None  # 차트도 서버가 그리므로 예시 모드에는 없다
     after = got["after"]
     assert set(after) == set(SummaryOut.model_fields)
     assert set(after["market"]) == set(MarketSummaryOut.model_fields)

@@ -158,13 +158,18 @@
     <div class="panel-head">
       <h2>정리 요약</h2>
       <span id="summary-meta" class="muted"></span>
-      <a id="report-link" class="btn outline link-btn" href="#" download>보고서 내려받기 (.md)</a>
+      <span class="links">
+        <a id="report-link" class="btn outline link-btn" href="#" download>보고서 (.md)</a>
+        <a id="report-html-link" class="btn outline link-btn" href="#" download>보고서 (.html, 차트 포함)</a>
+      </span>
       <span id="report-note" class="muted" hidden>예시 모드에서는 보고서를 내려받을 수 없습니다.</span>
     </div>
     <h3>종합 평가</h3>
     <p id="market-text" class="body"></p>
     <dl id="market-stats" class="stats"></dl>
+    <div id="charts-market" class="charts"></div>
     <h3>업종(테마)별 해석 <span class="muted">네이버 업종 기준 · 순위에 들어간 후보만</span></h3>
+    <div id="charts-themes" class="charts"></div>
     <div class="scroll">
       <table class="theme-table">
         <thead>
