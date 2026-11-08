@@ -10,6 +10,7 @@
 | `src/app.ts` | 화면 상태, 그리기, 버튼 동작, 처리 중 주기적 갱신 |
 | `src/api.ts` | 백엔드 호출 (경로는 아래 API 계약) |
 | `src/report.ts` | 보고서 링크 주소 만들기 |
+| `src/retry.ts` | "실패한 종목 다시 처리" 가 보낼 종목과 뺄 종목(서버가 받지 않는 영숫자 코드) 고르기 |
 | `src/criteria.ts` | 세션의 조건(`criteria`)을 필터·제외·수급 문구로 바꾸기 |
 | `src/notice.ts` | 오류 알림 (동작 오류와 조회 오류가 사라지는 때를 구분) |
 | `src/mock.ts` | 백엔드 없이 보는 예시 API (`?mock=1`) |
@@ -56,6 +57,7 @@ cd frontend && python3 -m http.server 8080     # http://localhost:8080/?mock=1
 | 세션 목록 | `GET /api/sessions` | `Session[]` (최근 순) |
 | 3 조회 | `GET /api/sessions/{id}` (`id` = `latest` 가능) | `SessionDetail` |
 | 2 나눠서 처리 | `POST /api/sessions/{id}/process` `{"offset": 0, "count": 10}` | `202 {"started": true, "queued": 7}` · 처리 중이면 `409 {"detail": "이미 처리 중입니다."}` |
+| 2' 실패한 종목 다시 처리 | `POST /api/sessions/{id}/process-failed` (본문 없음) | `202 {"started": true, "queued": 2}` · 다시 보낼 종목이 없으면 `200 {"started": false, "queued": 0}` · 처리 중이면 `409 {"detail": "이미 처리 중입니다."}` |
 | 4 정리 | `POST /api/sessions/{id}/organize` | `200 {"ranked": 115}` · 만드는 중이면 `409 {"detail": "...", "remaining": 0}` · 남았으면 `409 {"detail": "...", "remaining": 3}` |
 
 오류는 모두 `{"detail": "한국어 메시지"}` — 화면이 그대로 띄운다. 동작(처리·정리·새 목록)이 실패해서 띄운 오류는 다음 동작이 성공하거나 세션을 바꿀 때까지 두고, 조회 실패로 띄운 오류는 다음 조회가 성공하면 사라진다.
