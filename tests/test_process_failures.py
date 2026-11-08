@@ -76,12 +76,12 @@ def test_the_failure_reason_and_count_show_in_the_session_view(client, repo):
 
 
 def test_a_code_the_server_does_not_accept_is_failed_with_a_reason_and_never_sent(client, repo, externals):
-    session = seed(repo, codes=["000010", "0126Z0", "000030"])  # 영숫자 코드는 서버가 거절한다
+    session = seed(repo, codes=["000010", "0126z0", "000030"])  # 소문자 코드는 서버가 거절한다 (대문자 영숫자는 받는다, #82)
     post(client, session.id, offset=0, count=3)
     assert [s[0] for s in externals.analysis.started] == ["000010", "000030"]
-    item = repo.get_item(session.id, "0126Z0")
+    item = repo.get_item(session.id, "0126z0")
     assert item.state == "failed"
-    assert "숫자 6자리" in item.error_message
+    assert "영숫자 6자" in item.error_message
     assert states(repo, session)["000030"] == "done"  # 나머지는 계속 간다
 
 

@@ -40,13 +40,18 @@ def record(queue, logs, outcome, as_of=D):
 # --- 등록 ---
 
 
-def test_enqueue_marks_pending_and_fails_codes_the_server_rejects_with_a_reason(queue):
+def test_alphanumeric_codes_are_waiting_like_any_other_now_that_the_server_accepts_them(queue):
     assert queue.enqueue(D, _entries("000010", "0126Z0", "00680K")) == 3
+    assert {r.code: r.state for r in queue.rows(D, 10)} == {"000010": "pending", "0126Z0": "pending", "00680K": "pending"}
+
+
+def test_enqueue_marks_pending_and_fails_codes_the_server_rejects_with_a_reason(queue):
+    assert queue.enqueue(D, _entries("000010", "0126z0", "00680k")) == 3  # 소문자는 서버가 거절한다
     rows = {r.code: r for r in queue.rows(D, 10)}
     assert rows["000010"].state == "pending"
-    for code in ("0126Z0", "00680K"):
+    for code in ("0126z0", "00680k"):
         assert rows[code].state == "failed"
-        assert "6자리" in rows[code].message
+        assert "영숫자 6자" in rows[code].message
         assert rows[code].to_outcome().status == SKIPPED  # 보내지 않은 종목은 건너뜀으로 보인다
 
 
@@ -212,7 +217,7 @@ def test_mark_running_changes_only_that_stock(queue):
 
 
 def test_outcomes_excludes_waiting_stocks_and_converts_an_empty_decision_to_none(queue, logs):
-    queue.enqueue(D, _entries("000010", "000020", "000030", "0126Z0"))
+    queue.enqueue(D, _entries("000010", "000020", "000030", "0126z0"))
     queue.mark_running(D, "000010")
     record(queue, logs, AnalysisOutcome("000020", "x", FAILED, message="boom"))
     record(queue, logs, AnalysisOutcome("000030", "x", DONE, decision="Overweight"))
@@ -220,7 +225,7 @@ def test_outcomes_excludes_waiting_stocks_and_converts_an_empty_decision_to_none
     assert [(o.code, o.status, o.decision) for o in outs] == [
         ("000020", FAILED, None),
         ("000030", DONE, "Overweight"),
-        ("0126Z0", SKIPPED, None),
+        ("0126z0", SKIPPED, None),
     ]
     assert outs[1].is_target
     assert [o.code for o in queue.outcomes(D, 2)] == ["000020"]  # 1~2번 중 끝난 것
@@ -230,21 +235,21 @@ def test_outcomes_excludes_waiting_stocks_and_converts_an_empty_decision_to_none
 
 
 def test_import_done_never_overwrites_finished_or_unsendable_rows(queue, logs):
-    queue.enqueue(D, _entries("000010", "000020", "0126Z0"))
+    queue.enqueue(D, _entries("000010", "000020", "0126z0"))
     record(queue, logs, AnalysisOutcome("000020", "x", DONE, decision="Buy", report_id="000020_20261105_090000"))
     imported = queue.import_done(
         D,
         {
             "000010": AnalysisOutcome("000010", "x", DONE, decision="Hold", report_id="000010_20261105_080000", elapsed_seconds=300),
             "000020": AnalysisOutcome("000020", "x", DONE, decision="Sell", report_id="old"),
-            "0126Z0": AnalysisOutcome("0126Z0", "x", DONE, decision="Buy"),
+            "0126z0": AnalysisOutcome("0126z0", "x", DONE, decision="Buy"),
         },
     )
     assert imported == 1
     rows = {r.code: r for r in queue.rows(D, 9)}
     assert (rows["000010"].state, rows["000010"].decision, rows["000010"].elapsed_seconds) == ("done", "Hold", 300)
     assert (rows["000020"].decision, rows["000020"].report_id) == ("Buy", "000020_20261105_090000")
-    assert rows["0126Z0"].state == "failed"  # 서버가 받지 않는 코드는 가져오지 않는다
+    assert rows["0126z0"].state == "failed"  # 서버가 받지 않는 코드는 가져오지 않는다
 
 
 def test_a_failed_stock_can_be_filled_in_from_the_old_file(queue, logs):
