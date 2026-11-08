@@ -112,7 +112,11 @@ GET https://stock.naver.com/api/domestic/detail/{종목코드}/detail?codeType=K
 - 처리 중인 세션(처리 잠금이 잡힌 세션)은 정리하지 않는다. 정리하는 동안 같은 잠금을 쥐어서 점수가 바뀌지 않게 한다.
 - 종목끼리 점수를 비교해 **점수가 높은 순서로 순위**를 매긴다. 상대 등급이나 동점 묶기는 만들지 않는다. 점수가 같으면 순번(거래대금 큰 순서)이 앞선 종목이 위다.
 - 4번을 실행한 뒤에 종목을 다시 분석하면 순위를 "낡음"으로 표시하고, 4번을 다시 실행해야 최신이 된다.
-- **정리할 때 업종(테마)별 해석과 종합 평가를 DB 에 저장한다.** 순위와 같은 트랜잭션이라 하나가 실패하면 순위·정리 시각·요약이 모두 이전 그대로다. 다시 정리하면 지우고 새로 넣는다. API 응답·화면은 바꾸지 않는다 (저장만).
+- **정리할 때 업종(테마)별 해석과 종합 평가를 DB 에 저장한다.** 순위와 같은 트랜잭션이라 하나가 실패하면 순위·정리 시각·요약이 모두 이전 그대로다. 다시 정리하면 지우고 새로 넣는다.
+  - **저장한 요약을 읽는 곳 두 개**: 세션 조회 응답의 `summary`(`SummaryOut`, 정리하기 전에는 `null`)와 마크다운 보고서 `GET /api/sessions/{id}/report`(정리하기 전에는 `409`). 화면은 `summary` 로 "정리 요약" 카드를 그리고 보고서 링크를 건다.
+    등급·수급 분포의 키는 API 가 한국어 표기로 바꿔 순서를 고정해 내려준다 (DB 의 jsonb 는 키 순서를 지키지 않고, 저장값은 영어 코드값이다).
+  - **보고서는 저장한 문장을 그대로 싣는다** (`summary_report.py`). 문장을 다시 만들지 않아 화면과 같은 문장이고, 저장한 뒤 문장 틀이 바뀌어도 정리했을 때의 문장이다. 낡은 요약이면 보고서 머리에 그렇게 적는다.
+  - 보고서는 마크다운 하나다 (HTML·PDF 는 만들지 않았다).
   - **테마 = 네이버 업종**(`sector_code`/`sector_name`)이다. 투자 테마 이름은 저장하지 않으므로 쓰지 않는다. 업종을 읽지 못한 종목은 `업종 미확인`(`theme_code = ''`)으로 묶는다.
   - **수치로만 만든다.** 모델도 외부 조회도 쓰지 않는다 (`summary.py`). 업종마다 순위에 들어간 종목(끝났고 점수가 있는 종목)의 개수·평균 평가점수·등급 분포·평균 RSI·수급 상태 분포·외국인/기관 5일 순매수 합계를 계산해 정해진 문장 틀에 채운다. 수급을 읽지 못한 종목은 합계에서 빼고(0 으로 치지 않고), 하나도 못 읽었으면 합계는 비운다.
   - 해석 문장은 업종 평균을 **후보 전체 평균과 견준다**: 0.2 이상 높거나 낮으면 "높습니다·낮습니다", 아니면 "비슷합니다". 종목이 3개 미만이면 "참고만 하세요" 를 붙인다. 두 기준 모두 백테스트로 정한 값이 아니라 문장을 읽기 쉽게 하려는 값이다 (`summary.COMPARE_GAP`, `MIN_THEME_SIZE`).
@@ -186,7 +190,8 @@ GET https://stock.naver.com/api/domestic/detail/{종목코드}/detail?codeType=K
 | 2' 실패한 종목 다시 처리 | `POST /api/sessions/{id}/process-failed` | `routes_sessions.py` (`_start_processing` 을 구간 처리와 같이 쓴다) |
 | 6 평가점수 | (처리 안에서 계산) | `agent_ratings.py`(에이전트별 등급 읽기), `scoring.py` |
 | 3 조회 | `GET /api/sessions/{id}` (`id` 자리에 `latest` 가능) | `routes_sessions.py` |
-| 4 정리 | `POST /api/sessions/{id}/organize` | `routes_sessions.py`, `repository.py` |
+| 4 정리 | `POST /api/sessions/{id}/organize` | `routes_sessions.py`, `repository.py`, `summary.py` |
+| 4' 정리 요약 보고서 | `GET /api/sessions/{id}/report` (세션 조회의 `summary` 도 같은 요약) | `routes_sessions.py`, `summary_report.py` |
 | 상태 확인 | `GET /api/health` | `api.py` |
 | 저장 | PostgreSQL (스키마 v4) | `db.py`, `repository.py` |
 | 화면 | `krx-screener serve` → `/` | `server.py`, `frontend/` |

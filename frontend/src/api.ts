@@ -49,6 +49,8 @@ const httpApi: Api = {
     request<ProcessResult>('POST', `/api/sessions/${sid(id)}/process-failed`),
   // 4. 정리 (409: 남은 종목 있음, body.remaining)
   organize: (id: string | null): Promise<OrganizeResult> => request<OrganizeResult>('POST', `/api/sessions/${sid(id)}/organize`),
+  // 4'. 정리 요약 보고서(마크다운 첨부 파일). 정리하기 전에는 409
+  reportHref: (id: string | null): string => `${config.apiBase}/api/sessions/${sid(id)}/report`,
 };
 
 export const api: Api = config.mock ? createMockApi(ApiError) : httpApi;

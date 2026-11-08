@@ -79,6 +79,38 @@ export interface Counts {
   failed: number;
 }
 
+// 정리할 때 저장한 업종별 해석과 종합 평가. 등급·수급 분포의 키는 한국어 표기이고 순서가 정해져 있다 (매수 → 매도, 양호 → 미확인)
+export interface ThemeSummary {
+  code: string; // 네이버 업종 코드. 빈 문자열이면 업종을 읽지 못한 종목들
+  name: string;
+  item_count: number; // 순위에 들어간 후보 수
+  avg_score: number; // 저장값 (−2 ~ +2). 화면은 100 을 곱해 보인다
+  rating_counts: Record<string, number>;
+  flow_counts: Record<string, number>;
+  avg_rsi: number | null;
+  foreign_net_5d: number | null; // 수급을 읽은 후보의 합 (주). 읽은 후보가 없으면 null
+  institution_net_5d: number | null;
+  interpretation: string; // 수치로 만든 해석 문장
+}
+
+// 목록을 만들 때 저장한 전종목 수치 (키: evaluated, candidates, fail_each 등). 저장하기 전에 만든 목록은 null
+export type UniverseStats = Record<string, unknown>;
+
+export interface MarketSummary {
+  scored_count: number;
+  avg_score: number | null; // 점수가 있는 후보가 없으면 null
+  rating_counts: Record<string, number>;
+  flow_counts: Record<string, number>;
+  universe_stats: UniverseStats | null;
+  assessment: string; // 수치로 만든 종합 평가 문장
+}
+
+export interface Summary {
+  created_at: string; // 정리한 시각 (UTC)
+  market: MarketSummary;
+  themes: ThemeSummary[]; // 후보가 많은 업종 순
+}
+
 export interface SessionDetail {
   session: Session;
   processing: boolean; // 이 세션을 처리 중인지(잠금). true 면 화면이 주기적으로 다시 부른다
@@ -86,6 +118,7 @@ export interface SessionDetail {
   rank_stale: boolean; // 정리 이후 재분석된 종목이 있으면 true
   counts: Counts;
   items: Item[];
+  summary: Summary | null; // 정리할 때 저장한 요약. 정리한 적이 없으면 null
 }
 
 export interface ProcessResult {
@@ -113,4 +146,6 @@ export interface Api {
   process(id: string | null, offset: number, count: number): Promise<ProcessResult>;
   processFailed(id: string | null): Promise<ProcessResult>;
   organize(id: string | null): Promise<OrganizeResult>;
+  // 정리 요약 보고서(마크다운)를 내려받는 주소. 예시 모드는 서버가 없어 null
+  reportHref(id: string | null): string | null;
 }

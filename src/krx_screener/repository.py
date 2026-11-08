@@ -53,6 +53,15 @@ class Ranking:
     unscored: int  # 끝났지만 점수가 없어 순위에서 뺀 종목 수
 
 
+@dataclass(frozen=True)
+class StoredSummary:
+    """정리할 때 저장한 업종별 해석과 종합 평가 (``summary`` 가 만든 것을 읽어 온 모양). 등급·수급 분포의 키는 저장된 영어 코드값이다."""
+
+    created_at: datetime
+    market: summary.MarketSummary
+    themes: list[summary.ThemeSummary]
+
+
 @dataclass
 class Item:
     """세션 안의 종목 한 줄. 앞의 네 개는 목록을 만들 때 반드시 정해진다."""
@@ -394,6 +403,29 @@ class SessionRepository:
             (session_id,),
         ).fetchone()
         return bool(row[0])
+
+    def stored_summary(self, session_id: uuid.UUID) -> StoredSummary | None:
+        """정리할 때 저장한 요약. 정리한 적이 없으면 None. 업종은 종목 수가 많은 순(같으면 코드 순)이다."""
+        with self._cursor() as cur:
+            market = cur.execute(
+                "SELECT scored_count, avg_score, rating_counts, flow_counts, universe_stats, assessment, created_at "
+                "FROM session_market_summaries WHERE session_id = %s",
+                (session_id,),
+            ).fetchone()
+            if market is None:
+                return None
+            rows = cur.execute(
+                "SELECT theme_code AS code, theme_name AS name, item_count, avg_score, rating_counts, flow_counts, avg_rsi, "
+                "foreign_net_5d, institution_net_5d, interpretation FROM session_theme_summaries "
+                "WHERE session_id = %s ORDER BY item_count DESC, theme_code",
+                (session_id,),
+            ).fetchall()
+        created_at = market.pop("created_at")
+        return StoredSummary(
+            created_at=created_at,
+            market=summary.MarketSummary(**market),
+            themes=[summary.ThemeSummary(**row) for row in rows],
+        )
 
     # --- 에이전트별 등급 ---
 

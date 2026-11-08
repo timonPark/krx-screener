@@ -26,6 +26,9 @@ PAIRS = {
     "Item": models.ItemOut,
     "Counts": models.CountsOut,
     "SessionDetail": models.SessionDetailOut,
+    "ThemeSummary": models.ThemeSummaryOut,
+    "MarketSummary": models.MarketSummaryOut,
+    "Summary": models.SummaryOut,
 }
 
 

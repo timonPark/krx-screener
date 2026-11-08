@@ -58,6 +58,7 @@ cd frontend && python3 -m http.server 8080     # http://localhost:8080/?mock=1
 | 3 조회 | `GET /api/sessions/{id}` (`id` = `latest` 가능) | `SessionDetail` |
 | 2 나눠서 처리 | `POST /api/sessions/{id}/process` `{"offset": 0, "count": 10}` | `202 {"started": true, "queued": 7}` · 처리 중이면 `409 {"detail": "이미 처리 중입니다."}` |
 | 2' 실패한 종목 다시 처리 | `POST /api/sessions/{id}/process-failed` (본문 없음) | `202 {"started": true, "queued": 2}` · 다시 보낼 종목이 없으면 `200 {"started": false, "queued": 0}` · 처리 중이면 `409 {"detail": "이미 처리 중입니다."}` |
+| 4' 정리 요약 보고서 | `GET /api/sessions/{id}/report` (`id` = `latest` 가능) | 마크다운 첨부 파일(`krx-screener-summary-{기준일}.md`) · 정리한 적이 없으면 `409 {"detail": "정리를 먼저 실행하세요. …"}` |
 | 4 정리 | `POST /api/sessions/{id}/organize` | `200 {"ranked": 115}` · 만드는 중이면 `409 {"detail": "...", "remaining": 0}` · 남았으면 `409 {"detail": "...", "remaining": 3}` |
 
 오류는 모두 `{"detail": "한국어 메시지"}` — 화면이 그대로 띄운다. 동작(처리·정리·새 목록)이 실패해서 띄운 오류는 다음 동작이 성공하거나 세션을 바꿀 때까지 두고, 조회 실패로 띄운 오류는 다음 조회가 성공하면 사라진다.
@@ -79,7 +80,26 @@ cd frontend && python3 -m http.server 8080     # http://localhost:8080/?mock=1
   "ranked_at": null,            // 정리 실행 시각, 안 했으면 null
   "rank_stale": false,          // 정리 이후 재분석된 종목이 있으면 true
   "counts": { "pending": 112, "running": 0, "done": 3, "failed": 1 },
-  "items": [Item, ...]          // 세션 전체, seq 순
+  "items": [Item, ...],         // 세션 전체, seq 순
+  "summary": Summary | null     // 정리할 때 저장한 업종별 해석과 종합 평가. 정리한 적이 없으면 null
+}
+
+// Summary (정리하기 전에는 null). 등급·수급 분포의 키는 한국어이고 순서가 고정이다 (매수 → 매도, 양호 → 미확인)
+{
+  "created_at": "2026-11-08T10:35:04Z",          // 정리한 시각
+  "market": {
+    "scored_count": 114, "avg_score": -0.32,     // 순위에 들어간 후보 수, 평균 평가점수(저장값 −2 ~ +2). 점수가 있는 후보가 없으면 null
+    "rating_counts": { "매수": 0, "비중 확대": 0, "보유": 27, "비중 축소": 87, "매도": 0 },
+    "flow_counts": { "양호": 34, "부분": 70, "약함": 10, "미확인": 0 },
+    "universe_stats": { "evaluated": 2000, "candidates": 116, "fail_each": { "above_ma20": 800 } },   // 목록을 만들 때 저장한 전종목 수치. 저장 전에 만든 목록은 null
+    "assessment": "2026-11-05 기준 점수가 있는 후보 114개의 …"   // 수치로 만든 종합 평가 문장
+  },
+  "themes": [                                      // 후보가 많은 업종 순. 테마 = 네이버 업종
+    { "code": "24", "name": "반도체와반도체장비", "item_count": 29, "avg_score": -0.42,
+      "rating_counts": {…}, "flow_counts": {…}, "avg_rsi": 57.3,
+      "foreign_net_5d": -3123385, "institution_net_5d": 2292171,   // 수급을 읽은 후보의 합(주). 읽은 후보가 없으면 null
+      "interpretation": "반도체와반도체장비: 점수가 있는 후보 29개의 …" }
+  ]
 }
 
 // Item
@@ -102,6 +122,9 @@ cd frontend && python3 -m http.server 8080     # http://localhost:8080/?mock=1
 - 처리 시작: 범위 안 미완료 개수 × 5분으로 예상 시간 표시. 처리 중이거나 범위에 할 일이 없으면 버튼을 막고 이유를 적는다. 서버에 취소가 없다는 안내를 띄운다.
 - 정리: 대기·처리 중이 하나라도 있으면 막고 "남은 N개"를 보여준다. 실패는 남은 개수에 넣지 않는다.
 - 순위 낡음: `rank_stale` 이면 표 위 안내 띠 + 순위 칸에 "낡음".
+- 정리 요약: `summary` 가 있으면(정리한 뒤) 맨 아래에 "정리 요약" 카드를 보인다: 종합 평가 문장과 수치, 업종(테마)별 표와 해석 문장, "보고서 내려받기 (.md)" 링크(`GET /api/sessions/{id}/report`).
+  평가점수는 조회 표와 같이 저장값에 100 을 곱해 보이고, 해석 문장과 보고서는 저장값(−2 ~ +2)으로 적는다 (카드 아래에 그렇게 적는다). `rank_stale` 이면 카드 머리에 "낡음"이 붙는다.
+  예시 모드(`?mock=1`)는 서버가 없어 보고서를 내려받을 수 없고 그렇다고 알린다.
 - 색: 등급·점수는 국내 관례(매수·+ 빨강, 매도·− 파랑). 수급 점은 색과 모양(채움·테두리·점선)을 같이 바꾼다.
 - 보고서 번호: TradingAgents-KR 의 `report_id`(예: `028050_20261106_172435`)를 보여준다. `config.reportUrlTemplate` 에 `{report_id}` 가 들어간 주소를 정하면 그 보고서 화면으로 가는 링크가 된다
   (예: `http://localhost:4321/report?id={report_id}`). 정하지 않으면 글자로만 보인다. 서버의 실행 번호(`run_id`)는 나오지 않는다.

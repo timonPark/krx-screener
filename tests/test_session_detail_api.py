@@ -58,7 +58,8 @@ def test_a_session_comes_back_whole_in_seq_order_with_the_agreed_keys(client, re
     response = get(client, session.id)
     assert response.status_code == 200
     body = response.json()
-    assert set(body) == {"session", "processing", "ranked_at", "rank_stale", "counts", "items"}
+    assert set(body) == {"session", "processing", "ranked_at", "rank_stale", "counts", "items", "summary"}
+    assert body["summary"] is None  # 정리하기 전에는 요약이 없다
     assert [i["seq"] for i in body["items"]] == [1, 2, 3, 4]  # 넣은 순서와 상관없이 순번 순
     assert all(set(i) == ITEM_KEYS for i in body["items"])
     assert body["session"] == {
