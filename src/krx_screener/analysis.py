@@ -14,6 +14,8 @@ TradingAgents-KR 는 별도 프로세스(로컬 서버)이고 HTTP API 로만 �
   같은 종목을 다시 보내면 서버는 거절하지 않고 새 분석을 하나 더 시작해서 쿼터를 한 번 더 쓴다 (2026-11-07 실제 서버로 확인, #70).
   그래서 보내기 전에 같은 종목·기준일의 분석이 아직 도는지 보고, 돌고 있으면 새로 보내지 않고 그 분석을 이어서 기다린다 (``run_one``).
 - ``run_id`` 상태는 서버 메모리에만 있다. 서버가 재시작되면 404 가 된다.
+- 상태 조회(GET)가 끊기면(연결 재설정·시간 초과 등) 몇 번 다시 시도한다 (``SNAPSHOT_RETRIES``, #75). 한 번 끊겼다고 실패로 기록하면 서버가 끝낸 분석의 결과를 잃는다.
+  분석 시작(POST)은 다시 시도하지 않는다: 서버가 분석을 하나 더 시작해 쿼터를 한 번 더 쓸 수 있다. 서버가 답한 오류(404, 5xx)도 다시 시도하지 않는다.
 - 보고서 번호(``report_id``, 예: ``028050_20261106_172435``)는 상태 스냅샷에 없다. 서버는 보고서를 저장한 직후 ``report_saved``
   이벤트를 내고 그 다음에 ``done`` 을 내므로, 분석이 끝난 뒤 이벤트를 다시 읽으면(서버가 처음부터 되풀이해 준다) 항상 있다.
   보고서 목록(``GET /api/reports``)에서 종목코드로 찾는 방법은 쓰지 않는다: 같은 종목의 보고서가 여러 개일 수 있고 보고서 번호의
@@ -47,6 +49,10 @@ DONE, FAILED, TIMEOUT, SKIPPED = "done", "error", "timeout", "skipped"
 
 RUN_LIST_LIMIT = 20  # 서버가 기본으로 주는 개수. 도는 분석은 늘 최근이라 이만큼이면 된다 (응답에 보고서 본문이 들어 있어 무겁다)
 RUNNING_STATES = frozenset({"pending", "running"})  # 서버가 아직 끝내지 않은 분석
+# 상태 조회(GET)가 끊기면 이만큼 다시 시도한다 (#75). 서버가 막 닫은 연결(keep-alive)에 요청을 보내면 한 번 끊기는데, 새 연결로 바로 다시 보내면 된다.
+# 서버가 그 사이에 분석을 끝냈을 수 있어서, 한 번 끊겼다고 "분석 실패" 로 기록하면 끝난 결과를 잃는다.
+SNAPSHOT_RETRIES = 3
+RETRY_WAIT_SECONDS = 2.0
 
 _SERVER_CODE_RE = re.compile(r"^\d{6}$")
 _REPORT_ID_RE = re.compile(r"^\d{6}_\d{8}_\d{6}$")  # 서버의 보고서 폴더 이름: 종목코드_저장일_저장시각
@@ -56,6 +62,28 @@ logger = logging.getLogger(__name__)
 
 class AnalysisError(RuntimeError):
     """분석 서버와 통신하지 못했거나 서버가 요청을 거절했을 때. 메시지는 그대로 보여준다."""
+
+
+class ConnectionFailure(AnalysisError):
+    """서버와 연결하지 못했거나 연결이 끊겼을 때 (응답을 받지 못함). 서버가 답한 오류(HTTP 4xx/5xx)와 구별한다: 이쪽만 다시 시도할 수 있다."""
+
+
+def describe_exception(exc: BaseException) -> str:
+    """예외의 종류 이름만 속까지 이어 붙인다 (예: ``ConnectionError (ProtocolError → ConnectionResetError)``).
+
+    예외 글에는 주소 같은 것이 들어 있을 수 있어서 남기지 않는다. 종류 이름만으로도 끊긴 원인(연결 거부, 상대가 연결을 끊음, 시간 초과)을 가릴 수 있다.
+    """
+    names: list[str] = []
+    current: BaseException | None = exc
+    while current is not None and len(names) < 5:
+        names.append(type(current).__name__)
+        nested = next((arg for arg in current.args if isinstance(arg, BaseException)), None)
+        if nested is None:
+            reason = getattr(current, "reason", None)  # urllib3 의 MaxRetryError 는 원인을 reason 에 둔다
+            nested = reason if isinstance(reason, BaseException) else None
+        current = nested
+    head, *rest = names
+    return f"{head} ({' → '.join(rest)})" if rest else head
 
 
 def normalize_rating(raw: str | None) -> str | None:
@@ -108,20 +136,27 @@ def skipped_outcome(code: str, name: str) -> AnalysisOutcome:
 class AnalysisClient:
     """TradingAgents-KR API 의 얇은 HTTP 클라이언트."""
 
-    def __init__(self, base_url: str, request_timeout: float = 30.0, session: Any = None) -> None:
+    def __init__(
+        self,
+        base_url: str,
+        request_timeout: float = 30.0,
+        session: Any = None,
+        sleep: Callable[[float], None] = time.sleep,
+    ) -> None:
         import requests
 
         self._base = base_url.rstrip("/")
         self._timeout = request_timeout
         self._session = session or requests.Session()
         self._requests = requests
+        self._sleep = sleep
 
     def _call(self, method: str, path: str, **kwargs: Any):
         try:
             return self._session.request(method, self._base + path, timeout=self._timeout, **kwargs)
         except self._requests.RequestException as exc:
-            raise AnalysisError(
-                f"TradingAgents-KR 서버에 연결하지 못했습니다 ({self._base}): {type(exc).__name__}"
+            raise ConnectionFailure(
+                f"TradingAgents-KR 서버에 연결하지 못했습니다 ({self._base}): {describe_exception(exc)}"
             ) from None
 
     def check_health(self) -> None:
@@ -174,7 +209,23 @@ class AnalysisClient:
         return min(running, key=lambda run: str(run.get("created_at", "")))["run_id"]
 
     def snapshot(self, run_id: str) -> dict[str, Any]:
-        resp = self._call("GET", f"/api/runs/{run_id}")
+        """분석 상태. 연결이 끊기면 ``SNAPSHOT_RETRIES`` 번까지 다시 시도한다 (GET 이라 다시 보내도 서버에 아무 일도 더 생기지 않는다).
+
+        서버가 답한 오류(404, 5xx, 깨진 응답)는 다시 시도하지 않는다. 계속 끊기면 마지막 사유에 "서버에서는 끝났을 수 있다" 를 붙여 던진다.
+        """
+        for attempt in range(SNAPSHOT_RETRIES + 1):
+            try:
+                resp = self._call("GET", f"/api/runs/{run_id}")
+                break
+            except ConnectionFailure as exc:
+                if attempt == SNAPSHOT_RETRIES:
+                    raise ConnectionFailure(
+                        f"{exc} — 분석은 서버에서 계속되거나 이미 끝났을 수 있습니다 (상태 조회를 {SNAPSHOT_RETRIES}번 다시 시도했습니다)."
+                    ) from None
+                logger.warning(
+                    "분석 상태 조회가 끊겨 다시 시도합니다 (%s, %d/%d): %s", run_id, attempt + 1, SNAPSHOT_RETRIES, exc
+                )
+                self._sleep(RETRY_WAIT_SECONDS)
         if resp.status_code == 404:
             raise AnalysisError("서버가 이 분석을 찾지 못합니다 (서버가 재시작됐을 수 있음).")
         if resp.status_code != 200:
