@@ -12,7 +12,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from datetime import date
 from html import escape
 from zoneinfo import ZoneInfo
@@ -20,7 +20,7 @@ from zoneinfo import ZoneInfo
 from krx_screener import summary_charts
 from krx_screener.analysis import RATING_LABELS, REVIEW
 from krx_screener.flow import STATUS_LABELS
-from krx_screener.repository import StoredSummary
+from krx_screener.repository import Item, StoredSummary
 
 KST = ZoneInfo("Asia/Seoul")
 
@@ -32,6 +32,9 @@ STALE_NOTE = "※ 정리 이후 다시 분석된 종목이 있어 낡았을 수 
 DISCLAIMER = "등급과 이 요약은 분석 결과이고 투자 권유가 아닙니다."
 THEME_HEAD = ("업종", "후보", "평균 평가점수", "등급", "수급 상태", "평균 RSI", "외국인 5일(주)", "기관 5일(주)")
 THEME_RIGHT = {1, 2, 5, 6, 7}  # 숫자 칸 (오른쪽 정렬)
+STOCK_HEAD = ("순위", "종목", "코드", "최종 등급", "평가점수")
+STOCK_RIGHT = {0, 4}
+GRADE_CLASS = {"Buy": "g-buy", "Overweight": "g-overweight", "Hold": "g-hold", "Underweight": "g-underweight", "Sell": "g-sell"}
 
 
 def _cell(text: object) -> str:
@@ -98,6 +101,31 @@ def _theme_cells(t) -> list[str]:
     ]
 
 
+def _ranked(items: Sequence[Item]) -> tuple[list[Item], int]:
+    """정리할 때 순위를 받은 종목(순위 순)과, 받지 못한 종목 수. 순위가 없는 종목은 실패했거나 점수가 없거나 정리 뒤에 끝난 종목이다."""
+    ranked = sorted((i for i in items if i.rank is not None), key=lambda i: i.rank)
+    return ranked, len(items) - len(ranked)
+
+
+def _grade(item: Item) -> str:
+    """최종 등급의 한국어 표기. 서버가 등급을 읽지 못한 종목(``REVIEW``)은 그대로 둔다."""
+    return RATING_LABELS.get(item.decision, item.decision) or "—"
+
+
+def _stock_cells(item: Item) -> list[str]:
+    return [str(item.rank), item.name, item.code, _grade(item), _score(item.score)]
+
+
+def _stock_note(ranked: int, unranked: int) -> str:
+    if ranked == 0:
+        text = "순위에 들어간 종목이 없습니다."
+    else:
+        text = f"순위에 들어간 종목 {ranked}개의 최종 등급과 평가점수를 순위 순으로 적었습니다. 평가점수는 저장값(−2 ~ +2)입니다."
+    if unranked:
+        text += f" 순위에 들어가지 않은 종목 {unranked}개(실패·점수 없음·정리 이후에 끝난 종목)는 뺐습니다."
+    return text
+
+
 def _header(as_of: date, counts: Mapping[str, int], stored: StoredSummary) -> list[tuple[str, str]]:
     return [
         ("기준일", as_of.isoformat()),
@@ -106,8 +134,11 @@ def _header(as_of: date, counts: Mapping[str, int], stored: StoredSummary) -> li
     ]
 
 
-def render_markdown(as_of: date, counts: Mapping[str, int], stale: bool, stored: StoredSummary) -> str:
-    """``as_of`` 기준 세션의 정리 요약 보고서(마크다운). ``counts`` 는 처리 상태별 개수, ``stale`` 은 정리 뒤에 다시 분석된 종목이 있는가."""
+def render_markdown(as_of: date, counts: Mapping[str, int], stale: bool, stored: StoredSummary, items: Sequence[Item]) -> str:
+    """``as_of`` 기준 세션의 정리 요약 보고서(마크다운). ``counts`` 는 처리 상태별 개수, ``stale`` 은 정리 뒤에 다시 분석된 종목이 있는가.
+
+    ``items`` 는 세션의 종목들이다. 순위를 받은 종목만 종목별 결과 표에 순위 순으로 싣는다.
+    """
     market = stored.market
     lines = [
         f"# KRX Screener 정리 요약 — {as_of.isoformat()}",
@@ -153,6 +184,12 @@ def render_markdown(as_of: date, counts: Mapping[str, int], stale: bool, stored:
         for t in stored.themes:
             lines += ["", f"### {t.name}", "", t.interpretation]
 
+    ranked, unranked = _ranked(items)
+    lines += ["", "## 종목별 결과", "", _stock_note(len(ranked), unranked)]
+    if ranked:
+        lines += ["", "| " + " | ".join(STOCK_HEAD) + " |", "|---:|---|---|---|---:|"]
+        lines += ["| " + " | ".join(_cell(c) for c in _stock_cells(i)) + " |" for i in ranked]
+
     lines += ["", "---", "", DISCLAIMER, ""]
     return "\n".join(lines)
 
@@ -173,6 +210,9 @@ figure { margin: 0; padding: 12px; background: #fff; border: 1px solid #DDE1E7; 
 figure svg { max-width: 100%; height: auto; display: block; }
 p.note { color: #5B6370; font-size: 13px; }
 footer { margin-top: 40px; padding-top: 12px; border-top: 1px solid #DDE1E7; color: #5B6370; font-size: 12px; }
+.grade { display: inline-block; padding: 2px 10px; border-radius: 6px; font-size: 12px; font-weight: 600; }
+.g-buy { background: #FBE3E4; color: #A3212B; } .g-overweight { background: #FDF0F0; color: #A8343D; } .g-hold { background: #EEF0F3; color: #3F4652; }
+.g-underweight { background: #E9EFF9; color: #2A5596; } .g-sell { background: #DCE6F7; color: #1D4A8F; }
 @media print { body { background: #fff; } figure, table { break-inside: avoid; } }
 """.strip()
 
@@ -183,7 +223,7 @@ def _figures(names: list[str], stored: StoredSummary) -> str:
     return '<div class="charts">' + "".join(f"<figure>{svg}</figure>" for svg in drawn) + "</div>"
 
 
-def render_html(as_of: date, counts: Mapping[str, int], stale: bool, stored: StoredSummary) -> str:
+def render_html(as_of: date, counts: Mapping[str, int], stale: bool, stored: StoredSummary, items: Sequence[Item]) -> str:
     """같은 보고서를 HTML 한 문서로 만든다. 차트는 SVG 를 그대로 넣고, 그 밖의 글은 모두 이스케이프한다."""
     e = escape
     title = f"KRX Screener 정리 요약 — {as_of.isoformat()}"
@@ -218,5 +258,15 @@ def render_html(as_of: date, counts: Mapping[str, int], stale: bool, stored: Sto
         out.append(f"<table><thead><tr>{head}</tr></thead><tbody>{rows}</tbody></table>")
         for t in stored.themes:
             out.append(f"<h3>{e(t.name)}</h3><p>{e(t.interpretation)}</p>")
+    ranked, unranked = _ranked(items)
+    out += ["<h2>종목별 결과</h2>", f'<p class="note">{e(_stock_note(len(ranked), unranked))}</p>']
+    if ranked:
+        head = "".join(f'<th class="r">{e(h)}</th>' if i in STOCK_RIGHT else f"<th>{e(h)}</th>" for i, h in enumerate(STOCK_HEAD))
+        rows = []
+        for item in ranked:
+            rank, name, code, grade, score = _stock_cells(item)
+            badge = f'<span class="grade {GRADE_CLASS.get(item.decision, "g-hold")}">{e(grade)}</span>'
+            rows.append(f'<tr><td class="r">{e(rank)}</td><td>{e(name)}</td><td>{e(code)}</td><td>{badge}</td><td class="r">{e(score)}</td></tr>')
+        out.append(f"<table><thead><tr>{head}</tr></thead><tbody>{''.join(rows)}</tbody></table>")
     out += [f"<footer>{e(DISCLAIMER)}</footer>", "</main></body></html>"]
     return "\n".join(out) + "\n"
