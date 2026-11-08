@@ -183,7 +183,7 @@
 | 3 조회 | `GET /api/sessions/{id}` (`id`에 `latest` 가능) | `SessionDetail` |
 | 2 나눠서 처리 | `POST /api/sessions/{id}/process` `{"offset": 0, "count": 10}` | `202 {"started": true, "queued": 7}` · 처리 중이면 `409 {"detail": "이미 처리 중입니다."}` |
 | 2' 실패한 종목 다시 처리 | `POST /api/sessions/{id}/process-failed` (본문 없음) | `202 {"started": true, "queued": 2}` · 다시 보낼 종목이 없으면 `200 {"started": false, "queued": 0}` · 처리 중이면 `409 {"detail": "이미 처리 중입니다."}` |
-| 4' 정리 요약 보고서 | `GET /api/sessions/{id}/report` (`id`에 `latest` 가능, `?format=md\|html`) | 첨부 파일 `krx-screener-summary-{기준일}.md`(기본, 차트는 텍스트 막대그래프, 끝에 종목별 결과 표) 또는 `?format=html`(SVG 차트 포함, `.html`) · 정리한 적이 없으면 `409 {"detail": "정리를 먼저 실행하세요. …"}` · `format` 이 `md`·`html` 이 아니면 `422` |
+| 4' 정리 요약 보고서 | `GET /api/sessions/{id}/report` (`id`에 `latest` 가능, `?format=md\|html`) | 첨부 파일 `krx-screener-summary-{기준일}.md`(기본, 차트는 텍스트 막대그래프, 앞에 후보와 점수의 기준 절, 끝에 종목별 결과 표) 또는 `?format=html`(SVG 차트 포함, `.html`) · 정리한 적이 없으면 `409 {"detail": "정리를 먼저 실행하세요. …"}` · `format` 이 `md`·`html` 이 아니면 `422` |
 | 4'' 정리 요약 차트 | `GET /api/sessions/{id}/charts/{이름}.svg` (`id`에 `latest` 가능, 이름: `rating`·`flow`·`breadth`·`theme-score`·`theme-ratings`) | `image/svg+xml` (`Cache-Control: no-cache`) · 정리한 적이 없으면 `409` · 모르는 이름이거나 전종목 수치가 없는 목록의 `breadth` 면 `404` |
 | 4 정리 | `POST /api/sessions/{id}/organize` | `200 {"ranked": 115, "unscored": 0}` · 만드는 중·실패·중단된 목록이면 `409 {"detail": "…", "remaining": 0}` · 남았으면 `409 {"detail": "…", "remaining": 3}` · 처리 중이면 `409 {"detail": "이미 처리 중입니다.", "remaining": N}` |
 

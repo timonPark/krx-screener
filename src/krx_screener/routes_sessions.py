@@ -345,6 +345,8 @@ def get_report(session_id: str, request: Request, report_format: Literal["md", "
     """정리 요약을 보고서 파일로 내려받는다 (``latest`` 가능). ``format`` 은 ``md``(기본, 마크다운) 또는 ``html``. 정리한 적이 없으면 ``409``.
 
     정리할 때 저장한 문장을 그대로 싣는다 (``summary_report``). 마크다운은 텍스트 막대그래프, HTML 은 SVG 차트가 들어 있다.
+    둘 다 앞에 **후보와 점수의 기준**(목록을 뽑을 때 쓴 조건, 점수가 있는 후보의 정의와 개수, 평가점수 계산식)이 있다.
+    조건을 기록하지 않은 세션은 현재 설정으로 채우지 않고 기록이 없다고 적는다.
     둘 다 끝에 **종목별 결과 표**(순위·종목명·종목코드·최종 등급·평가점수)가 있다. 정리할 때 순위를 받은 종목만 순위 순으로 싣는다.
     응답은 첨부 파일이고 이름은 ``krx-screener-summary-<기준일>.md`` / ``.html`` 이다.
     """
@@ -355,7 +357,7 @@ def get_report(session_id: str, request: Request, report_format: Literal["md", "
         if stored is None:
             return JSONResponse(status_code=409, content={"detail": NOT_ORGANIZED})
         render, media_type = (render_html, "text/html") if report_format == "html" else (render_markdown, "text/markdown")
-        body = render(session.as_of, repo.counts(session.id), repo.rank_is_stale(session.id), stored, repo.items(session.id))
+        body = render(session.as_of, repo.counts(session.id), repo.rank_is_stale(session.id), stored, repo.items(session.id), session.criteria)
     return Response(
         content=body,
         media_type=f"{media_type}; charset=utf-8",

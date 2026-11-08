@@ -18,9 +18,11 @@ from html import escape
 from zoneinfo import ZoneInfo
 
 from krx_screener import summary_charts
+from krx_screener.agent_ratings import AGENT_TOTAL
 from krx_screener.analysis import RATING_LABELS, REVIEW
 from krx_screener.flow import STATUS_LABELS
 from krx_screener.repository import Item, StoredSummary
+from krx_screener.scoring import RATING_POINTS
 
 KST = ZoneInfo("Asia/Seoul")
 
@@ -126,6 +128,79 @@ def _stock_note(ranked: int, unranked: int) -> str:
     return text
 
 
+# 세션이 목록을 뽑을 때 쓴 조건(``sessions.criteria``)을 글로 바꾸는 규칙. 화면(``frontend/src/criteria.ts``)과 같은 말을 쓴다.
+EXCLUDE_LABELS = {
+    "preferred": "우선주", "spac": "스팩", "managed": "관리종목", "zero_volume": "거래정지 의심",
+    "new_listing": "신규상장", "reit": "리츠", "caution": "투자주의환기", "foreign": "외국기업",
+}
+FLOW_MODE_TEXT = {"mark": "표시만 (후보를 거르지 않음)", "filter": "약함 후보는 탈락"}
+
+
+def _won(n: int) -> str:
+    """원 → ``10억`` · ``1.5억`` · ``5,000만`` (억 미만은 만 단위). 화면의 ``fmtWon`` 과 같다."""
+    if n >= 1e8:
+        return f"{round(n / 1e8, 2):,g}억"
+    if n >= 1e4:
+        return f"{round(n / 1e4, 2):,g}만"
+    return f"{n:,}"
+
+
+def _points(n: int) -> str:
+    return "0" if n == 0 else f"{'+' if n > 0 else '−'}{abs(n)}"
+
+
+def _condition_lines(criteria: Mapping | None) -> list[str]:
+    """후보를 뽑는 조건 줄들. 조건을 기록하지 않은 세션은 **현재 설정으로 채우지 않고** 기록이 없다고 말한다 (옛 세션을 지금 설정으로 채우면 틀린 값일 수 있다)."""
+    if not criteria:
+        return ["이 세션은 목록을 뽑을 때 쓴 조건이 기록되어 있지 않습니다 (조건을 기록하기 전에 만든 목록). 지금 설정으로 채워 넣지 않았습니다."]
+    f, flow = criteria["filters"], criteria["flow"]
+    lines = [f"{f['avg_trading_value_window']}거래일 평균 거래대금(종가×거래량 근사) {_won(f['min_avg_trading_value_krw'])} 이상"]
+    if f["price_above_ma"]:
+        lines.append("종가가 " + "·".join(f"{n}일선" for n in f["price_above_ma"]) + " 위")
+    lines.append(f"RSI {f['rsi_max']:g} 미만" if f["rsi_max"] is not None else "RSI 조건 없음 (값만 저장)")
+    excluded = "·".join(EXCLUDE_LABELS.get(k, k) for k in criteria["exclude"]) or "없음"
+    lines.append(f"제외한 종류: {excluded}")
+    lines.append(f"수급: {FLOW_MODE_TEXT.get(flow['mode'], flow['mode'])}, 최근 {flow['window_days']}거래일")
+    return lines
+
+
+def _basis_sections(criteria: Mapping | None, items: Sequence[Item]) -> list[tuple[str, list[str]]]:
+    """"후보와 점수의 기준" 절: (소제목, 줄들). 마크다운과 HTML 이 같이 쓴다. 후보 수는 지금 DB 의 종목으로 센다."""
+    scored = sum(1 for i in items if i.state == "done" and i.score is not None)
+    failed = sum(1 for i in items if i.state == "failed")
+    unscored = sum(1 for i in items if i.state == "done" and i.score is None)
+    waiting = sum(1 for i in items if i.state in ("pending", "running"))
+    missing = [f"{label} {n}개" for label, n in (("실패", failed), ("완료했지만 점수 없음", unscored), ("아직 처리하지 않은 종목", waiting)) if n]
+    count_lines = [
+        f"후보 {len(items)}개 중 점수가 있는 종목은 {scored}개입니다.",
+        "점수가 있는 후보: 분석이 끝났고(완료) 분석에 참여한 에이전트 중 한 개 이상의 등급을 읽은 종목입니다. "
+        "그렇지 않은 종목은 순위·요약·차트에서 뺍니다. 점수를 0으로 지어내지 않습니다.",
+    ]
+    if missing:
+        count_lines.append("점수가 없는 종목: " + " · ".join(missing))
+    points = " · ".join(f"{RATING_LABELS[code]} {_points(pts)}" for code, pts in RATING_POINTS.items())
+    return [
+        (
+            "후보를 뽑는 기준",
+            [
+                "후보는 목록을 만들 때 시세만으로 계산하는 규칙 필터(모델 미사용)를 통과한 종목입니다. 분석해 볼 만하다는 뜻일 뿐 투자 판단이 아닙니다.",
+                *_condition_lines(criteria),
+                "후보는 평균 거래대금이 큰 순서로 순번(1, 2, …)을 매깁니다.",
+            ],
+        ),
+        ("점수가 있는 후보", count_lines),
+        (
+            "평가점수와 순위",
+            [
+                f"평가점수는 분석에 참여한 에이전트 {AGENT_TOTAL}개가 낸 등급을 점수로 바꿔 평균한 값입니다 (−2 ~ +2): {points}.",
+                "등급을 읽지 못한 에이전트는 평균에서 빼며 0 으로 치지 않습니다. 모든 에이전트의 비중이 같고 강세·약세 리서처도 포함합니다.",
+                "최종 등급(TradingAgents-KR 의 최종 결정)과는 다른 값입니다.",
+                "순위는 평가점수가 높은 순이고, 같으면 순번(평균 거래대금이 큰 순)이 앞선 종목이 위입니다.",
+            ],
+        ),
+    ]
+
+
 def _header(as_of: date, counts: Mapping[str, int], stored: StoredSummary) -> list[tuple[str, str]]:
     return [
         ("기준일", as_of.isoformat()),
@@ -134,10 +209,12 @@ def _header(as_of: date, counts: Mapping[str, int], stored: StoredSummary) -> li
     ]
 
 
-def render_markdown(as_of: date, counts: Mapping[str, int], stale: bool, stored: StoredSummary, items: Sequence[Item]) -> str:
+def render_markdown(
+    as_of: date, counts: Mapping[str, int], stale: bool, stored: StoredSummary, items: Sequence[Item], criteria: Mapping | None
+) -> str:
     """``as_of`` 기준 세션의 정리 요약 보고서(마크다운). ``counts`` 는 처리 상태별 개수, ``stale`` 은 정리 뒤에 다시 분석된 종목이 있는가.
 
-    ``items`` 는 세션의 종목들이다. 순위를 받은 종목만 종목별 결과 표에 순위 순으로 싣는다.
+    ``items`` 는 세션의 종목들이고 순위를 받은 종목만 종목별 결과 표에 순위 순으로 싣는다. ``criteria`` 는 세션이 목록을 뽑을 때 쓴 조건 (없으면 None).
     """
     market = stored.market
     lines = [
@@ -150,6 +227,9 @@ def render_markdown(as_of: date, counts: Mapping[str, int], stale: bool, stored:
     if stale:
         lines += ["", f"> {STALE_NOTE}"]
 
+    lines += ["", "## 후보와 점수의 기준"]
+    for heading, bullets in _basis_sections(criteria, items):
+        lines += ["", f"### {heading}", "", *[f"- {line}" for line in bullets]]
     lines += [
         "",
         "## 종합 평가",
@@ -198,6 +278,7 @@ _CSS = """
 body { margin: 0; background: #F4F5F7; color: #14171C; font-family: 'IBM Plex Sans KR', 'Apple SD Gothic Neo', 'Malgun Gothic', sans-serif; line-height: 1.6; }
 main { max-width: 1100px; margin: 0 auto; padding: 24px 16px 48px; }
 h1 { font-size: 22px; margin: 0 0 8px; } h2 { font-size: 17px; margin: 32px 0 8px; } h3 { font-size: 14px; margin: 18px 0 2px; }
+ul { margin: 4px 0 8px; padding-left: 20px; font-size: 13px; }
 ul.meta { list-style: none; padding: 0; margin: 0; color: #5B6370; font-size: 13px; }
 .notice { margin: 16px 0; padding: 10px 14px; border-radius: 8px; background: #FFF6E5; border: 1px solid #F0D49A; color: #6B4700; font-size: 13px; }
 table { border-collapse: collapse; width: 100%; background: #fff; font-size: 13px; }
@@ -223,7 +304,9 @@ def _figures(names: list[str], stored: StoredSummary) -> str:
     return '<div class="charts">' + "".join(f"<figure>{svg}</figure>" for svg in drawn) + "</div>"
 
 
-def render_html(as_of: date, counts: Mapping[str, int], stale: bool, stored: StoredSummary, items: Sequence[Item]) -> str:
+def render_html(
+    as_of: date, counts: Mapping[str, int], stale: bool, stored: StoredSummary, items: Sequence[Item], criteria: Mapping | None
+) -> str:
     """같은 보고서를 HTML 한 문서로 만든다. 차트는 SVG 를 그대로 넣고, 그 밖의 글은 모두 이스케이프한다."""
     e = escape
     title = f"KRX Screener 정리 요약 — {as_of.isoformat()}"
@@ -237,6 +320,9 @@ def render_html(as_of: date, counts: Mapping[str, int], stale: bool, stored: Sto
     ]
     if stale:
         out.append(f'<p class="notice">{e(STALE_NOTE)}</p>')
+    out.append("<h2>후보와 점수의 기준</h2>")
+    for heading, bullets in _basis_sections(criteria, items):
+        out.append(f"<h3>{e(heading)}</h3><ul>" + "".join(f"<li>{e(line)}</li>" for line in bullets) + "</ul>")
     out += [
         "<h2>종합 평가</h2>",
         f"<p>{e(stored.market.assessment)}</p>",
