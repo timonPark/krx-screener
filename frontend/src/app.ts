@@ -356,7 +356,7 @@ function renderProcess(items: Item[], total: number): void {
 }
 
 // "실패한 종목 다시 처리" 버튼 (#77): 세션 전체의 실패한 종목을 한꺼번에 다시 보낸다. 영숫자 코드는 서버가 받지 않아 뺀다.
-// 서버에서는 끝났는데 연결이 끊겨 실패로 기록된 종목도 다시 보내면 분석을 한 번 더 한다 (쿼터).
+// 서버에 이미 끝난 분석이 있으면 백엔드가 쿼터 없이 가져오고(#75), 없는 종목만 새로 분석한다 (쿼터).
 function renderRetry(items: Item[], processing: boolean, build: Build): void {
   const { retry, excluded }: RetryPlan = retryPlan(items);
   const n: number = retry.length;
@@ -373,8 +373,8 @@ function renderRetry(items: Item[], processing: boolean, build: Build): void {
       : '실패한 종목이 없습니다.';
     disabled = true;
   } else {
-    hint = `실패한 ${n}개를 다시 보냅니다 (약 ${fmtMinutes(n * config.minutesPerItem)}, 분석 쿼터 최대 ${n}번).`
-      + ` 서버에서는 끝났는데 연결이 끊겨 실패로 기록된 종목도 쿼터를 다시 씁니다.${note}`;
+    hint = `실패한 ${n}개를 다시 처리합니다. 서버에 이미 끝난 분석이 있으면 쿼터 없이 가져오고, 없는 종목만 새로 분석합니다`
+      + ` (새로 분석하면 약 ${fmtMinutes(n * config.minutesPerItem)}, 분석 쿼터 최대 ${n}번).${note}`;
   }
   $<HTMLButtonElement>('retry-btn').disabled = disabled;
   $('retry-btn').textContent = `실패한 종목 다시 처리 (${n}개)`;
@@ -448,7 +448,8 @@ $('retry-btn').addEventListener('click', (): void => {
   if (!n) return;
   // 쿼터를 쓰는 일이라 한 번 확인한다. 취소하면 아무것도 보내지 않는다
   const ok: boolean = window.confirm(
-    `실패한 ${n}개를 다시 처리합니다.\n약 ${fmtMinutes(n * config.minutesPerItem)}이 걸리고 분석 쿼터를 최대 ${n}번 씁니다.\n계속할까요?`,
+    `실패한 ${n}개를 다시 처리합니다.\n서버에 이미 끝난 분석이 있으면 쿼터 없이 가져오고, 없는 종목만 새로 분석합니다.\n`
+    + `새로 분석하면 약 ${fmtMinutes(n * config.minutesPerItem)}이 걸리고 분석 쿼터를 최대 ${n}번 씁니다.\n계속할까요?`,
   );
   if (!ok) return;
   void withBusy((): Promise<unknown> => api.processFailed(state.sessionId));
