@@ -112,6 +112,8 @@ def test_processing_updates_the_screen_and_organizing_is_gated_until_everything_
     assert facts["gatedApi"] == 409  # 화면 밖에서 눌러도 서버가 막는다
     assert (facts["allProcessed"]["done"], facts["allProcessed"]["failed"]) == ("7", "1")
     assert facts["allProcessed"]["organizeDisabled"] is False
+    # 점수는 저장값(−2 ~ +2)에 100 을 곱한 정수로 보인다. 부호는 붙이고 0 은 부호가 없다 (#76)
+    assert facts["scores"] == ["1:+60", "2:−80", "3:+20", "4:—", "5:+40", "6:0", "7:+60", "8:−40"]
     # 정리하면 점수 높은 순으로 순위가 붙고 실패한 종목은 순위에서 빠진다
     organized = facts["organized"]
     assert organized["sort"] == "rank" and organized["stale"] is False
