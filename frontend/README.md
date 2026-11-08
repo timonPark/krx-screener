@@ -58,7 +58,8 @@ cd frontend && python3 -m http.server 8080     # http://localhost:8080/?mock=1
 | 3 조회 | `GET /api/sessions/{id}` (`id` = `latest` 가능) | `SessionDetail` |
 | 2 나눠서 처리 | `POST /api/sessions/{id}/process` `{"offset": 0, "count": 10}` | `202 {"started": true, "queued": 7}` · 처리 중이면 `409 {"detail": "이미 처리 중입니다."}` |
 | 2' 실패한 종목 다시 처리 | `POST /api/sessions/{id}/process-failed` (본문 없음) | `202 {"started": true, "queued": 2}` · 다시 보낼 종목이 없으면 `200 {"started": false, "queued": 0}` · 처리 중이면 `409 {"detail": "이미 처리 중입니다."}` |
-| 4' 정리 요약 보고서 | `GET /api/sessions/{id}/report` (`id` = `latest` 가능) | 마크다운 첨부 파일(`krx-screener-summary-{기준일}.md`) · 정리한 적이 없으면 `409 {"detail": "정리를 먼저 실행하세요. …"}` |
+| 4' 정리 요약 보고서 | `GET /api/sessions/{id}/report` (`id` = `latest` 가능, `?format=md\|html`) | 첨부 파일 `krx-screener-summary-{기준일}.md`(기본, 차트는 텍스트 막대그래프) 또는 `?format=html`(SVG 차트 포함, `.html`) · 정리한 적이 없으면 `409 {"detail": "정리를 먼저 실행하세요. …"}` · `format` 이 `md`·`html` 이 아니면 `422` |
+| 4'' 정리 요약 차트 | `GET /api/sessions/{id}/charts/{이름}.svg` (`id`에 `latest` 가능, 이름: `rating`·`flow`·`breadth`·`theme-score`·`theme-ratings`) | `image/svg+xml` (`Cache-Control: no-cache`) · 정리한 적이 없으면 `409` · 모르는 이름이거나 전종목 수치가 없는 목록의 `breadth` 면 `404` |
 | 4 정리 | `POST /api/sessions/{id}/organize` | `200 {"ranked": 115}` · 만드는 중이면 `409 {"detail": "...", "remaining": 0}` · 남았으면 `409 {"detail": "...", "remaining": 3}` |
 
 오류는 모두 `{"detail": "한국어 메시지"}` — 화면이 그대로 띄운다. 동작(처리·정리·새 목록)이 실패해서 띄운 오류는 다음 동작이 성공하거나 세션을 바꿀 때까지 두고, 조회 실패로 띄운 오류는 다음 조회가 성공하면 사라진다.
@@ -122,7 +123,8 @@ cd frontend && python3 -m http.server 8080     # http://localhost:8080/?mock=1
 - 처리 시작: 범위 안 미완료 개수 × 5분으로 예상 시간 표시. 처리 중이거나 범위에 할 일이 없으면 버튼을 막고 이유를 적는다. 서버에 취소가 없다는 안내를 띄운다.
 - 정리: 대기·처리 중이 하나라도 있으면 막고 "남은 N개"를 보여준다. 실패는 남은 개수에 넣지 않는다.
 - 순위 낡음: `rank_stale` 이면 표 위 안내 띠 + 순위 칸에 "낡음".
-- 정리 요약: `summary` 가 있으면(정리한 뒤) 맨 아래에 "정리 요약" 카드를 보인다: 종합 평가 문장과 수치, 업종(테마)별 표와 해석 문장, "보고서 내려받기 (.md)" 링크(`GET /api/sessions/{id}/report`).
+- 정리 요약: `summary` 가 있으면(정리한 뒤) 맨 아래에 "정리 요약" 카드를 보인다: 종합 평가 문장과 수치, 업종(테마)별 표와 해석 문장, 차트 5개(`<img>` 로 `GET /api/sessions/{id}/charts/{이름}.svg` 를 불러 보인다, 정리 시각을 주소에 붙여 다시 정리하면 새 그림을 받는다), "보고서 (.md)"·"보고서 (.html, 차트 포함)" 링크(`GET /api/sessions/{id}/report`, 둘째는 `?format=html`).
+  차트는 서버가 SVG 로 한 번만 그리고 화면과 HTML 보고서가 같은 그림을 쓴다. 같은 정리면 조회가 돌아도 그림을 다시 만들지 않는다(깜빡임·재요청 방지). 전종목 수치가 없는 목록은 시장 폭 차트를 그리지 않는다.
   평가점수는 조회 표와 같이 저장값에 100 을 곱해 보이고, 해석 문장과 보고서는 저장값(−2 ~ +2)으로 적는다 (카드 아래에 그렇게 적는다). `rank_stale` 이면 카드 머리에 "낡음"이 붙는다.
   예시 모드(`?mock=1`)는 서버가 없어 보고서를 내려받을 수 없고 그렇다고 알린다.
 - 색: 등급·점수는 국내 관례(매수·+ 빨강, 매도·− 파랑). 수급 점은 색과 모양(채움·테두리·점선)을 같이 바꾼다.
