@@ -90,14 +90,35 @@ def test_the_interpretation_states_the_numbers_and_how_the_theme_compares_with_a
     items += [item(i, -0.6, "Underweight", sector=("B", "낮은업종")) for i in (4, 5, 6)]
     items += [item(i, 0.0, "Hold", sector=("C", "비슷한업종")) for i in (7, 8, 9)]  # 전체 평균 0.0
     found = by_code(summarize(items, AS_OF, None)[0])
-    assert "평균 평가점수 +0.60" in found["A"].interpretation
+    assert "평균 평가점수는 +0.60이며" in found["A"].interpretation
     assert "후보 전체 평균(+0.00)보다 높습니다" in found["A"].interpretation
     assert "후보 전체 평균(+0.00)보다 낮습니다" in found["B"].interpretation
-    assert "후보 전체 평균(+0.00)과 비슷합니다" in found["C"].interpretation
+    assert "후보 전체 평균(+0.00)에 견줘 비슷한 수준입니다" in found["C"].interpretation
     # 등급 분포와 수급, 순매수 합계(주)가 그대로 들어간다
     assert "비중 확대 3개" in found["A"].interpretation
     assert "양호 0·부분 3·약함 0·미확인 0" in found["A"].interpretation
     assert "외국인 +300주" in found["A"].interpretation and "기관 +600주" in found["A"].interpretation
+
+
+def test_no_number_is_followed_by_a_particle_that_depends_on_how_it_is_read():
+    """조사는 앞말의 받침에 따라 달라진다 (로/으로, 과/와). 숫자는 읽는 소리가 받침을 정하므로(0 영, 3 삼, 6 육) 문장 틀이 숫자 뒤에 그런 조사를 붙이면 틀린다.
+
+    점수의 끝자리가 0~9 인 경우를 모두 훑어, 숫자·괄호·퍼센트 바로 뒤에 받침 따라 바뀌는 조사가 오지 않는지 본다
+    (이며·이고·입니다 같은 서술격 조사는 받침과 상관없이 쓸 수 있어 괜찮다).
+    """
+    import re
+
+    bad = re.compile(r"[0-9)%][로과와을를은는가]")
+    seen = 0
+    for tenths in range(-9, 10):
+        for other in (-0.3, 0.0, 0.6):
+            items = [item(i, tenths / 10, sector=("A", "가업종")) for i in (1, 2, 3)]
+            items += [item(i, other, sector=("B", "나업종")) for i in (4, 5, 6)]
+            themes, market = summarize(items, AS_OF, {"evaluated": 2000, "candidates": 116, "fail_each": {"above_ma20": 800}})
+            for text in [*(t.interpretation for t in themes), market.assessment]:
+                seen += 1
+                assert not bad.search(text), bad.search(text).group(0) + " <- " + text
+    assert seen == 19 * 3 * 3
 
 
 def test_a_small_theme_is_marked_as_reference_only():

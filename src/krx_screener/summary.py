@@ -92,19 +92,20 @@ def _mean(values: Sequence[float]) -> float | None:
 
 
 def _compare_text(avg: float, overall: float) -> str:
+    # 숫자 뒤에 받침 따라 바뀌는 조사(로/으로, 과/와)를 붙이지 않는다: 숫자는 읽는 소리가 받침을 정해서(0 영, 3 삼, 6 육) 문장 틀로는 맞출 수 없다.
     gap = avg - overall
     whole = f"후보 전체 평균({_signed(overall)})"
     if gap >= COMPARE_GAP:
         return f"{whole}보다 높습니다"
     if gap <= -COMPARE_GAP:
         return f"{whole}보다 낮습니다"
-    return f"{whole}과 비슷합니다"
+    return f"{whole}에 견줘 비슷한 수준입니다"
 
 
 def _theme_text(name: str, count: int, avg: float, overall: float, ratings: Mapping[str, int], flows: Mapping[str, int],
                 avg_rsi: float | None, foreign: int | None, institution: int | None) -> str:
     sentences = [
-        f"{name}: 점수가 있는 후보 {count}개의 평균 평가점수 {_signed(avg)}로 {_compare_text(avg, overall)}.",
+        f"{name}: 점수가 있는 후보 {count}개의 평균 평가점수는 {_signed(avg)}이며 {_compare_text(avg, overall)}.",
         f"등급은 {_rating_text(ratings)}입니다.",
     ]
     if avg_rsi is not None:
