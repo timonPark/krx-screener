@@ -3,7 +3,7 @@
 접속 정보는 환경변수 ``KRX_SCREENER_DATABASE_URL`` 로만 받는다 (코드·설정 파일에 넣지 않는다).
 스키마는 버전이 붙은 SQL 을 순서대로 한 번씩 적용한다 (``schema_migrations`` 에 적용한 버전을 남긴다).
 
-저장 범위: 세션 → 세션 안의 종목 → 종목별 에이전트 등급. **보고서 본문은 저장하지 않는다.**
+저장 범위: 세션 → 세션 안의 종목 → 종목별 에이전트 등급, 그리고 정리할 때 만드는 업종(테마)별 해석·종합 평가. **보고서 본문은 저장하지 않는다.**
 상태·등급·수급 상태 같은 코드값은 영어(내부값)로 저장하고, 사용자에게 보여줄 때 한국어로 바꾼다.
 
 개발용 DB 는 ``docker compose up -d`` 로 띄우고, 스키마는 다음으로 만든다.
@@ -133,6 +133,43 @@ MIGRATIONS: list[tuple[int, str, str]] = [
         """
         -- 목록을 뽑을 때 쓴 조건(필터 값, 제외한 종류, 수급 방식)의 JSON. NULL 이면 조건 기록 없음 (기존 세션, 명령줄 세션).
         ALTER TABLE sessions ADD COLUMN criteria jsonb;
+        """,
+    ),
+    (
+        5,
+        "정리 요약: 업종(테마)별 해석, 종합 평가, 목록을 만들 때의 전종목 수치",
+        """
+        -- 목록을 만들 때 전종목 시세로 센 수치(시세를 확인한 종목 수, 조건별 불충족 수 등)의 JSON. NULL 이면 저장하지 않은 목록 (이 기능 전에 만든 것).
+        -- 정리할 때 종합 평가에 쓴다. 이 값은 목록을 만드는 순간에만 알 수 있고 나중에 다시 구할 수 없다
+        ALTER TABLE sessions ADD COLUMN universe_stats jsonb;
+
+        -- 정리할 때 세션마다 새로 만든다 (다시 정리하면 지우고 새로 넣는다). 테마 = 네이버 업종이고, 업종을 읽지 못한 종목은 theme_code = ''
+        CREATE TABLE session_theme_summaries (
+            session_id          uuid             NOT NULL REFERENCES sessions (id) ON DELETE CASCADE,
+            theme_code          text             NOT NULL,
+            theme_name          text             NOT NULL,
+            item_count          integer          NOT NULL CHECK (item_count >= 1),
+            avg_score           double precision NOT NULL,
+            rating_counts       jsonb            NOT NULL,   -- 등급(영어 내부값) → 종목 수
+            flow_counts         jsonb            NOT NULL,   -- 수급 상태(영어 내부값) → 종목 수
+            avg_rsi             double precision,
+            foreign_net_5d      bigint,                      -- 수급을 읽은 종목의 합 (주). 읽은 종목이 없으면 NULL
+            institution_net_5d  bigint,
+            interpretation      text             NOT NULL,
+            created_at          timestamptz      NOT NULL DEFAULT now(),
+            PRIMARY KEY (session_id, theme_code)
+        );
+
+        CREATE TABLE session_market_summaries (
+            session_id     uuid             PRIMARY KEY REFERENCES sessions (id) ON DELETE CASCADE,
+            scored_count   integer          NOT NULL CHECK (scored_count >= 0),
+            avg_score      double precision,                 -- 점수가 있는 종목이 없으면 NULL
+            rating_counts  jsonb            NOT NULL,
+            flow_counts    jsonb            NOT NULL,
+            universe_stats jsonb,                            -- 이 평가에 쓴 전종목 수치. 없으면 NULL
+            assessment     text             NOT NULL,
+            created_at     timestamptz      NOT NULL DEFAULT now()
+        );
         """,
     ),
 ]

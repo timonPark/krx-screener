@@ -18,6 +18,8 @@ import psycopg
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
+from krx_screener import summary
+
 STATES = ("pending", "running", "done", "failed")
 
 
@@ -136,13 +138,19 @@ class SessionRepository:
             (stage, done, total, session_id),
         )
 
-    def finish_build(self, session_id: uuid.UUID, items: Sequence[Item]) -> None:
-        """종목을 저장하고 완성(ready)으로 바꾼다. 한 트랜잭션이라 저장이 실패하면 둘 다 반영되지 않는다."""
+    def finish_build(
+        self, session_id: uuid.UUID, items: Sequence[Item], universe_stats: Mapping | None = None
+    ) -> None:
+        """종목과 전종목 수치(``universe_stats``, 정리 때 종합 평가에 쓴다)를 저장하고 완성(ready)으로 바꾼다.
+
+        한 트랜잭션이라 저장이 실패하면 모두 반영되지 않는다. 전종목 수치를 주지 않으면 비워 둔다 (그 목록의 종합 평가는 전종목 수치가 없다고 말한다).
+        """
         with self._conn.transaction():
             self.add_items(session_id, items)
             self._conn.execute(
-                "UPDATE sessions SET build_state = 'ready', build_stage = '', build_done = %s, build_total = %s WHERE id = %s",
-                (len(items), len(items), session_id),
+                "UPDATE sessions SET build_state = 'ready', build_stage = '', build_done = %s, build_total = %s, "
+                "universe_stats = %s WHERE id = %s",
+                (len(items), len(items), None if universe_stats is None else Jsonb(dict(universe_stats)), session_id),
             )
 
     def fail_build(self, session_id: uuid.UUID, message: str) -> None:
@@ -320,7 +328,8 @@ class SessionRepository:
 
         순위는 1 부터 빠짐없이 이어진다 (동점 묶기 없음). 실패한 종목과, 끝났지만 점수가 없는 종목(에이전트 등급을 하나도 못 읽음)은
         비교에서 빼고 순위를 비운다 — 점수를 0 으로 지어내지 않는다. 이전 순위는 모두 지우고 새로 매긴다.
-        한 트랜잭션이라 중간에 실패하면 이전 순위와 정리 시각이 그대로 남는다.
+        같은 트랜잭션에서 업종(테마)별 해석과 종합 평가를 새로 만들어 저장한다 (``summary``, 이전 것은 지운다).
+        한 트랜잭션이라 중간에 실패하면 이전 순위·요약과 정리 시각이 그대로 남는다.
         """
         with self._conn.transaction():
             if self._conn.execute("SELECT 1 FROM sessions WHERE id = %s", (session_id,)).fetchone() is None:
@@ -338,8 +347,35 @@ class SessionRepository:
                 "WHERE session_id = %s AND NOT archived AND state = 'done' AND score IS NULL",
                 (session_id,),
             ).fetchone()[0]
+            self._store_summaries(session_id)
             self._conn.execute("UPDATE sessions SET ranked_at = now() WHERE id = %s", (session_id,))
         return Ranking(ranked=ranked, unscored=unscored)
+
+    def _store_summaries(self, session_id: uuid.UUID) -> None:
+        """순위에 들어간 종목으로 업종별 해석과 종합 평가를 만들어 이전 것을 바꿔 넣는다 (부르는 쪽의 트랜잭션 안에서)."""
+        as_of, universe_stats = self._conn.execute(
+            "SELECT as_of, universe_stats FROM sessions WHERE id = %s", (session_id,)
+        ).fetchone()
+        themes, market = summary.summarize(self.items(session_id), as_of, universe_stats)
+        self._conn.execute("DELETE FROM session_theme_summaries WHERE session_id = %s", (session_id,))
+        self._conn.execute("DELETE FROM session_market_summaries WHERE session_id = %s", (session_id,))
+        with self._conn.cursor() as cur:
+            cur.executemany(
+                "INSERT INTO session_theme_summaries (session_id, theme_code, theme_name, item_count, avg_score, "
+                "rating_counts, flow_counts, avg_rsi, foreign_net_5d, institution_net_5d, interpretation) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+                [
+                    (session_id, t.code, t.name, t.item_count, t.avg_score, Jsonb(t.rating_counts), Jsonb(t.flow_counts),
+                     t.avg_rsi, t.foreign_net_5d, t.institution_net_5d, t.interpretation)
+                    for t in themes
+                ],
+            )
+        self._conn.execute(
+            "INSERT INTO session_market_summaries (session_id, scored_count, avg_score, rating_counts, flow_counts, "
+            "universe_stats, assessment) VALUES (%s, %s, %s, %s, %s, %s, %s)",
+            (session_id, market.scored_count, market.avg_score, Jsonb(market.rating_counts), Jsonb(market.flow_counts),
+             None if market.universe_stats is None else Jsonb(market.universe_stats), market.assessment),
+        )
 
     def rank_is_stale(self, session_id: uuid.UUID) -> bool:
         """정리한 뒤에 분석이 바뀌어서 지금 다시 정리하면 순위가 달라질 수 있는가. 정리한 적이 없으면 False.

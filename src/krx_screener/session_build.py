@@ -52,7 +52,7 @@ def build_session(deps, conn, session_id: uuid.UUID, as_of: date) -> None:
     with conn:
         repo = SessionRepository(conn)
         try:
-            items = build_items(
+            items, universe_stats = build_items(
                 deps.externals,
                 deps.config,
                 as_of,
@@ -62,7 +62,7 @@ def build_session(deps, conn, session_id: uuid.UUID, as_of: date) -> None:
                 retry_wait=deps.retry_wait,
                 progress=_ProgressWriter(repo, session_id, deps.progress_interval),
             )
-            repo.finish_build(session_id, items)
+            repo.finish_build(session_id, items, universe_stats)
         except Exception as exc:  # noqa: BLE001 — 어떤 오류든 세션을 실패로 남겨야 화면이 알 수 있다
             logger.exception("목록 만들기 실패 (%s)", as_of)
             try:
