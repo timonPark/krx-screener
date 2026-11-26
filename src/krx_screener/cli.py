@@ -270,7 +270,7 @@ _STATE_NAMES = {"pending": "대기", "running": "처리 중", "done": "완료", 
 
 
 def _state_of(row: QueueRow) -> str:
-    """목록에 보일 상태 이름의 키. 서버가 받지 않는 코드(영숫자)는 실패가 아니라 건너뜀이다."""
+    """목록에 보일 상태 이름의 키. 서버가 받지 않는 형식의 코드(소문자 등)는 실패가 아니라 건너뜀이다."""
     return "skipped" if row.state == "failed" and not server_accepts(row.code) else row.state
 
 
@@ -451,7 +451,7 @@ def analyze(
         console.print(
             f"기준일 {trade_date} · 후보 {len(candidates):,}개 중 {rows[0].rank}~{rows[-1].rank}번 "
             f"{len(rows)}개 — 보낼 것 {n_send}개 · 이전 결과 재사용 {n_reuse}개 · "
-            f"건너뜀(영숫자 코드) {n_skip}개"
+            f"건너뜀(서버가 받지 않는 코드) {n_skip}개"
         )
         if dry_run:
             _print_dry_run(queue, plan)

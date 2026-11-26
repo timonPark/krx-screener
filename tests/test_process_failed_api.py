@@ -2,7 +2,8 @@
 
 구간 처리(``/process``)가 실패한 종목을 순번 순서대로 끼워 돌리면 아직 안 돌린 대기 종목이 뒤로 밀리고 쿼터와 시간을 쓴다.
 그래서 ``/process`` 는 대기(와 처리 중으로 남은) 종목만 보내고, 실패한 종목은 ``POST /api/sessions/{id}/process-failed`` 가
-세션 전체에서 한꺼번에 다시 보낸다. 서버가 숫자 6자리만 받아서, 다시 돌려도 계속 실패하는 영숫자 코드는 뺀다.
+세션 전체에서 한꺼번에 다시 보낸다. 서버가 받지 않는 형식의 코드(대문자 영숫자 6자가 아님)는 다시 돌려도 계속 실패하므로 뺀다.
+영숫자 코드(``0126Z0`` 등)는 서버가 받게 되어(TradingAgents-KR #181) 다른 종목처럼 다시 처리한다 (#82).
 """
 
 import uuid
@@ -12,7 +13,7 @@ import pytest
 from fakes import FakeAnalysisServer
 from test_process_api import post, post_failed, seed, states, swap_server
 
-CODES = ["000010", "000020", "000030", "000040", "000050", "0126Z0"]  # 순번 1~6, 마지막은 영숫자 코드
+CODES = ["000010", "000020", "000030", "000040", "000050", "0126z0"]  # 순번 1~6, 마지막은 서버가 거절하는 코드(소문자)
 BUSY = {"detail": "이미 처리 중입니다."}
 
 
@@ -59,7 +60,7 @@ def test_all_failed_stocks_of_the_session_are_sent_again_in_order_and_the_rest_a
     assert (response.status_code, response.json()) == (202, {"started": True, "queued": 2})
     assert [s[0] for s in externals.analysis.started] == ["000020", "000040"]  # 순번 순서, 구간과 상관없이 세션 전체
     assert states(repo, session) == {
-        "000010": "done", "000020": "done", "000030": "pending", "000040": "done", "000050": "pending", "0126Z0": "pending",
+        "000010": "done", "000020": "done", "000030": "pending", "000040": "done", "000050": "pending", "0126z0": "pending",
     }
     assert repo.get_item(session.id, "000010").decision == "Buy"  # 끝난 종목은 다시 보내지 않는다
 
@@ -84,20 +85,29 @@ def test_a_stock_that_fails_again_stays_failed_with_the_new_reason(client, repo)
 
 def test_failed_stocks_the_server_would_refuse_are_left_out_because_they_can_never_succeed(client, repo, externals):
     session = seed(repo, codes=CODES)
-    fail(repo, session, "000020", "0126Z0", reason="서버가 숫자 6자리 종목코드만 받아 보내지 않았습니다.")
+    fail(repo, session, "000020", "0126z0", reason="서버가 받는 종목코드(대문자 영숫자 6자)가 아니라 보내지 않았습니다.")
     assert post_failed(client, session.id).json() == {"started": True, "queued": 1}
-    assert [s[0] for s in externals.analysis.started] == ["000020"]  # 영숫자 코드는 보내지 않는다
-    assert states(repo, session)["0126Z0"] == "failed"
-    assert "숫자 6자리" in repo.get_item(session.id, "0126Z0").error_message  # 사유는 그대로 남는다
+    assert [s[0] for s in externals.analysis.started] == ["000020"]  # 서버가 거절하는 형식은 보내지 않는다
+    assert states(repo, session)["0126z0"] == "failed"
+    assert "영숫자 6자" in repo.get_item(session.id, "0126z0").error_message  # 사유는 그대로 남는다
 
 
-@pytest.mark.parametrize("failed", [(), ("0126Z0",)], ids=["no-failures", "only-alphanumeric"])
+@pytest.mark.parametrize("failed", [(), ("0126z0",)], ids=["no-failures", "only-refused-code"])
 def test_nothing_is_sent_when_there_is_nothing_to_retry(client, repo, externals, failed):
     session = seed(repo, codes=CODES)
     fail(repo, session, *failed)
     response = post_failed(client, session.id)
     assert (response.status_code, response.json()) == (200, {"started": False, "queued": 0})
     assert externals.analysis.started == []
+
+
+def test_a_failed_alphanumeric_code_is_sent_again_now_that_the_server_accepts_it(client, repo, externals):
+    session = seed(repo, codes=["000010", "0126Z0", "0088M0"])
+    fail(repo, session, "0126Z0", "0088M0", reason="서버가 숫자 6자리 종목코드만 받아 보내지 않았습니다.")  # 서버가 받기 전에 남은 옛 사유
+    assert post_failed(client, session.id).json() == {"started": True, "queued": 2}
+    assert [s[0] for s in externals.analysis.started] == ["0126Z0", "0088M0"]
+    item = repo.get_item(session.id, "0126Z0")
+    assert (item.state, item.error_message) == ("done", "")  # 옛 사유는 지워진다
 
 
 # --- 구간 처리와 같은 안전장치 ---

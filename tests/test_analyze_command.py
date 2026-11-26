@@ -14,7 +14,7 @@ DATE = "2026-11-05"
 
 CANDIDATES = [
     ("000010", "가나다전자", "양호"),
-    ("0126Z0", "영숫자코드", "부분"),  # 서버가 거절하는 코드 형식
+    ("0126z0", "영숫자코드", "부분"),  # 서버가 거절하는 코드 형식 (소문자. 대문자 영숫자는 이제 받는다, #82)
     ("000020", "라마바화학", "약함"),
     ("000030", "사아자증권", "미확인"),
 ]
@@ -115,7 +115,7 @@ def test_sends_only_the_first_n_in_order_and_skips_alphanumeric(tmp_path, server
     rows = list(csv.DictReader((day / "analysis.csv").open(encoding="utf-8-sig")))
     assert [(r["code"], r["status"], r["decision"], r["is_target"]) for r in rows] == [
         ("000010", "done", "Buy", "True"),
-        ("0126Z0", "skipped", "", "False"),
+        ("0126z0", "skipped", "", "False"),
         ("000020", "done", "Hold", "False"),
     ]
     assert rows[0]["decision_label"] == "매수"
@@ -196,7 +196,7 @@ def test_one_failure_does_not_stop_the_rest_and_is_recorded(tmp_path, server, qu
     assert rows["000030"]["decision"] == "Overweight"
     # 오류 난 종목은 다음 실행에서 다시 보낸다 (완료된 것만 재사용)
     states = {r.code: r.state for r in AnalysisQueue(queue_db).rows(DATE, 10)}
-    assert states == {"000010": "failed", "0126Z0": "failed", "000020": "done", "000030": "done"}  # 오류·건너뜀은 실패 + 사유
+    assert states == {"000010": "failed", "0126z0": "failed", "000020": "done", "000030": "done"}  # 오류·건너뜀은 실패 + 사유
     server.errors.clear()
     again = _analyze(tmp_path, "--count", "4", "--yes")
     assert again.exit_code == 0, again.output
@@ -268,9 +268,9 @@ def test_progress_is_written_to_the_db_as_each_stock_finishes(tmp_path, server, 
     rows = _db_rows(queue_db)
     assert rows["000010"].state == "done" and rows["000010"].decision == "Buy"
     assert rows["000010"].report_id == "000010_20261105_100000"  # 웹 처리와 같게 보고서 번호가 저장된다
-    assert rows["0126Z0"].state == "failed" and "6자리" in rows["0126Z0"].message  # 서버가 받지 않는 코드는 보내지 않는다
+    assert rows["0126z0"].state == "failed" and "영숫자 6자" in rows["0126z0"].message  # 서버가 받지 않는 코드는 보내지 않는다
     assert rows["000030"].decision == "Overweight"
-    assert [rows[c].rank for c in ("000010", "0126Z0", "000020", "000030")] == [1, 2, 3, 4]
+    assert [rows[c].rank for c in ("000010", "0126z0", "000020", "000030")] == [1, 2, 3, 4]
     assert rows["000010"].flow_status == "양호"
 
 

@@ -3,7 +3,7 @@
 TradingAgents-KR 는 별도 프로세스(로컬 서버)이고 HTTP API 로만 연결한다. 그 코드에 의존하지 않는다.
 
 - ``GET  /api/health``        서버 확인
-- ``POST /api/runs``          분석 시작 → 201 + ``run_id`` (종목코드는 ``^\\d{6}$`` 만 허용)
+- ``POST /api/runs``          분석 시작 → 201 + ``run_id`` (종목코드는 대문자 영숫자 6자 ``^[0-9A-Z]{6}$`` 만 허용, TradingAgents-KR #181)
 - ``GET  /api/runs/{run_id}`` 상태 스냅샷 (``pending``/``running``/``done``/``error``, ``decision``)
 - ``GET  /api/runs?limit=N``  최근 분석 목록 (종목·기준일·상태·생성 시각). 같은 종목·기준일의 분석이 아직 도는지 볼 때 쓴다
 - ``GET  /api/runs/{run_id}/events`` 진행 이벤트 (SSE). 보고서 번호는 여기의 ``report_saved`` 이벤트에만 있다
@@ -22,7 +22,8 @@ TradingAgents-KR 는 별도 프로세스(로컬 서버)이고 HTTP API 로만 �
   이벤트를 내고 그 다음에 ``done`` 을 내므로, 분석이 끝난 뒤 이벤트를 다시 읽으면(서버가 처음부터 되풀이해 준다) 항상 있다.
   이번 분석의 번호를 보고서 목록(``GET /api/reports``)에서 종목코드로 찾는 방법은 쓰지 않는다: 같은 종목의 보고서가 여러 개일 수 있고 보고서 번호의
   시각은 저장한 시각이라 어느 것이 이번 분석인지 가릴 수 없다. (이미 실패로 기록된 종목을 구할 때만 같은 종목·기준일의 **가장 최근** 보고서를 쓴다.)
-- 영숫자 종목코드(예: ``0126Z0``)는 서버가 거절하므로 보내지 않고 "건너뜀" 으로 기록한다.
+- 영숫자 종목코드(예: ``0126Z0``)도 서버가 받는다 (TradingAgents-KR #181, 2026-11-08) → 다른 종목처럼 보낸다 (#82). 서버가 거절하는 형식
+  (소문자, 5자·7자 등)만 보내지 않고 "건너뜀" 으로 기록한다 (``server_accepts``).
 """
 
 from __future__ import annotations
@@ -57,8 +58,10 @@ RUNNING_STATES = frozenset({"pending", "running"})  # 서버가 아직 끝내지
 SNAPSHOT_RETRIES = 3
 RETRY_WAIT_SECONDS = 2.0
 
-_SERVER_CODE_RE = re.compile(r"^\d{6}$")
-_REPORT_ID_RE = re.compile(r"^\d{6}_\d{8}_\d{6}$")  # 서버의 보고서 폴더 이름: 종목코드_저장일_저장시각
+# 서버(TradingAgents-KR)가 받는 종목코드: 대문자 영숫자 6자 (`/openapi.json` 의 ``RunCreate.ticker``). 숫자만이 아니다: 신규 상장 종목은 ``0126Z0`` 같은 코드를 받는다.
+# ``\d`` 는 전각 숫자도 받으므로 ``[0-9]`` 로 쓴다.
+_SERVER_CODE_RE = re.compile(r"[0-9A-Z]{6}")
+_REPORT_ID_RE = re.compile(r"[0-9A-Z]{6}_[0-9]{8}_[0-9]{6}")  # 서버의 보고서 폴더 이름: 종목코드_저장일_저장시각
 
 logger = logging.getLogger(__name__)
 
@@ -109,7 +112,7 @@ def rating_label(rating: str | None) -> str:
 
 
 def server_accepts(code: str) -> bool:
-    """서버가 받아 주는 종목코드인가 (숫자 6자리만)."""
+    """서버가 받아 주는 종목코드인가 (대문자 영숫자 6자. 소문자·5자·7자는 거절한다)."""
     return bool(_SERVER_CODE_RE.fullmatch(code))
 
 
@@ -141,7 +144,7 @@ class AnalysisOutcome:
 def skipped_outcome(code: str, name: str) -> AnalysisOutcome:
     """서버가 거절할 종목코드라 보내지 않은 종목의 결과."""
     return AnalysisOutcome(
-        code, name, SKIPPED, message="서버가 숫자 6자리 종목코드만 받아 보내지 않았습니다."
+        code, name, SKIPPED, message="서버가 받는 종목코드(대문자 영숫자 6자)가 아니라 보내지 않았습니다."
     )
 
 

@@ -44,9 +44,13 @@ def test_rating_label_and_server_code_rule():
     assert rating_label(REVIEW) == REVIEW
     assert rating_label(None) == ""
     assert server_accepts("005930")
-    assert not server_accepts("0126Z0")
-    assert not server_accepts("00680K")
+    assert server_accepts("0126Z0")  # 서버가 영숫자 코드를 받게 됐다 (TradingAgents-KR #181, 대문자 영숫자 6자)
+    assert server_accepts("00680K")
+    assert not server_accepts("0126z0")  # 소문자
     assert not server_accepts("5930")
+    assert not server_accepts("0126Z")  # 5자
+    assert not server_accepts("0126Z00")  # 7자
+    assert not server_accepts("0126Z ")
 
 
 class FakeClient:
@@ -155,10 +159,18 @@ def test_start_rejection_and_lost_run_are_failed_outcomes():
     assert lost.run_id == "run-1"
 
 
-def test_alphanumeric_code_is_skipped_without_calling_the_server():
-    client = FakeClient([])
+def test_alphanumeric_code_is_sent_to_the_server_like_any_other():
+    client = FakeClient([{"status": "done", "decision": "Hold"}])
     outcome = _run(client, code="0126Z0")
+    assert client.started == [("0126Z0", "2026-11-05", "low")]  # 서버가 받으므로 보낸다 (#82)
+    assert outcome.status == DONE
+
+
+def test_a_code_the_server_refuses_is_skipped_without_calling_it():
+    client = FakeClient([])
+    outcome = _run(client, code="0126z0")  # 소문자는 서버가 거절한다
     assert outcome.status == SKIPPED
+    assert "영숫자 6자" in outcome.message
     assert client.started == []
     assert not outcome.is_target
 
@@ -303,7 +315,13 @@ def test_report_id_skips_garbled_lines_and_keeps_reading():
     assert client.report_id("abc") == REPORT
 
 
-@pytest.mark.parametrize("bad", ["", "../../etc", "ABC_20261106_172435", "028050_2026_1", None, 123])
+def test_the_report_id_of_an_alphanumeric_code_is_trusted_too():
+    report = "0126Z0_20261108_120000"  # 서버의 보고서 번호도 대문자 영숫자 6자로 바뀌었다 (TradingAgents-KR #181)
+    client, _ = _client(_Resp(200, lines=_events({"type": "report_saved", "report_id": report}, {"type": "done"})))
+    assert client.report_id("abc") == report
+
+
+@pytest.mark.parametrize("bad", ["", "../../etc", "ABC_20261106_172435", "028050_2026_1", "0126z0_20261108_120000", None, 123])
 def test_a_report_id_in_an_unexpected_shape_is_not_trusted(bad):
     client, _ = _client(_Resp(200, lines=_events({"type": "report_saved", "report_id": bad}, {"type": "done"})))
     assert client.report_id("abc") is None

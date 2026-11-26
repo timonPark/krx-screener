@@ -82,6 +82,13 @@ def test_reports_without_a_usable_decision_or_report_id_are_skipped():
     assert (found.report_id, found.decision) == ("003380_20261106_100000", "Overweight")
 
 
+def test_a_finished_report_of_an_alphanumeric_code_is_found_too():
+    row = _row(ticker="0126Z0", stamp="2026-11-08T12:00:00", report_id="0126Z0_20261108_120000")
+    client, session = _client(_Resp(200, [row]))
+    assert client.find_finished_report("0126Z0", AS_OF).report_id == "0126Z0_20261108_120000"
+    assert "ticker=0126Z0" in session.calls[0][1]
+
+
 def test_agent_ratings_are_kept_only_when_they_are_name_to_text_pairs():
     client, _ = _client(_Resp(200, [_row(ratings={"market": "Buy", "news": 3, "bull": None, 7: "Hold"})]))
     assert client.find_finished_report("003380", AS_OF).agent_ratings == {"market": "Buy"}
